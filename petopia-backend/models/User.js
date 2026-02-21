@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['user', 'vet', 'pet_sitter'],
+      enum: ['user', 'vet', 'groomer', 'pet_sitter'],
       default: 'user',
     },
     verificationToken: {
@@ -78,6 +78,18 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    isPrivate: {
+      type: Boolean,
+      default: false,
+    },
+    showLocation: {
+      type: Boolean,
+      default: true,
+    },
+    showEmail: {
+      type: Boolean,
+      default: false,
+    },
     followers: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -90,6 +102,25 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    blockedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    // Push notification tokens (one per device)
+    fcmTokens: [
+      {
+        token: { type: String, required: true },
+        device: { type: String, default: 'unknown' },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
+    // Presence tracking
+    lastSeen: {
+      type: Date,
+      default: null,
+    },
     createdAt: {
       type: Date,
       default: Date.now,

@@ -168,6 +168,7 @@ router.post('/', protect, async (req, res) => {
       licenseNumber,
       yearsOfExperience,
       allowMessages,
+      photos,
     } = req.body;
 
     if (!clinicName || !phone || !address?.city) {
@@ -214,6 +215,7 @@ router.post('/', protect, async (req, res) => {
       licenseNumber: licenseNumber || '',
       yearsOfExperience: yearsOfExperience || 0,
       allowMessages: allowMessages !== false,
+      photos: photos || [],
     });
 
     // Update user role to 'vet'
@@ -266,6 +268,7 @@ router.put('/:id', protect, async (req, res) => {
       'yearsOfExperience',
       'allowMessages',
       'isActive',
+      'photos',
     ];
 
     const updates = {};

@@ -22,6 +22,9 @@ const notificationSchema = new mongoose.Schema(
         'appointment_cancelled', // either cancelled → notify other party
         'appointment_completed', // vet completed → notify user
         'appointment_reminder', // upcoming appointment reminder
+        'new_follower', // someone followed you (public profile)
+        'follow_request', // someone requested to follow you (private profile)
+        'follow_request_accepted', // your follow request was accepted
       ],
     },
     title: {
@@ -48,6 +51,16 @@ const notificationSchema = new mongoose.Schema(
       petId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Pet',
+        default: null,
+      },
+      followRequestId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'FollowRequest',
+        default: null,
+      },
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
         default: null,
       },
     },

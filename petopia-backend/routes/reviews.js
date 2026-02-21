@@ -1,6 +1,7 @@
 const express = require('express');
 const Review = require('../models/Review');
 const VetClinic = require('../models/VetClinic');
+const Appointment = require('../models/Appointment');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -70,6 +71,33 @@ router.get('/:clinicId', async (req, res) => {
   }
 });
 
+// GET /api/reviews/:clinicId/can-review — Check if user can leave a review
+router.get('/:clinicId/can-review', protect, async (req, res) => {
+  try {
+    const existing = await Review.findOne({
+      clinic: req.params.clinicId,
+      user: req.user.id,
+    });
+    const completedAppt = await Appointment.findOne({
+      clinic: req.params.clinicId,
+      user: req.user.id,
+      status: 'completed',
+    });
+    const clinic = await VetClinic.findById(req.params.clinicId);
+    const isOwner = clinic && clinic.owner.toString() === req.user.id;
+    res.json({
+      success: true,
+      canReview: !existing && !!completedAppt && !isOwner,
+      hasReviewed: !!existing,
+      hasCompletedService: !!completedAppt,
+      isOwner: !!isOwner,
+    });
+  } catch (error) {
+    console.error('Can review check error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // POST /api/reviews/:clinicId — Create a review
 router.post('/:clinicId', protect, async (req, res) => {
   try {
@@ -85,6 +113,19 @@ router.post('/:clinicId', protect, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: 'Cannot review your own clinic' });
+    }
+
+    // Must have a completed appointment
+    const completedAppointment = await Appointment.findOne({
+      clinic: req.params.clinicId,
+      user: req.user.id,
+      status: 'completed',
+    });
+    if (!completedAppointment) {
+      return res.status(400).json({
+        success: false,
+        message: 'You can only leave a review after a completed appointment',
+      });
     }
 
     // Check if already reviewed

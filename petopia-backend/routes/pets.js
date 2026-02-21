@@ -53,6 +53,7 @@ router.post('/', async (req, res) => {
       color,
       bio,
       isNeutered,
+      profileImage,
     } = req.body;
 
     if (!name || !species) {
@@ -72,6 +73,7 @@ router.post('/', async (req, res) => {
       color: color || '',
       bio: bio || '',
       isNeutered: isNeutered || false,
+      profileImage: profileImage || '',
     });
 
     res.status(201).json({ success: true, pet });

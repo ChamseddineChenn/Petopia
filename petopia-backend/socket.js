@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { updateLastSeen } = require('./services/hybridDelivery');
 
 let io = null;
 
@@ -93,6 +94,71 @@ function initSocket(httpServer) {
       socket.leave(room);
     });
 
+    // ----- Chat Events -----
+    // User joins a conversation room for real-time updates
+    socket.on('join_conversation', (conversationId) => {
+      socket.join(`conv:${conversationId}`);
+    });
+
+    socket.on('leave_conversation', (conversationId) => {
+      socket.leave(`conv:${conversationId}`);
+    });
+
+    // Typing indicator
+    socket.on('typing', ({ conversationId, isTyping }) => {
+      socket.to(`conv:${conversationId}`).emit('user_typing', {
+        conversationId,
+        userId,
+        isTyping,
+      });
+    });
+
+    // When a user connects, mark their undelivered messages as delivered
+    const markDeliveredOnConnect = async () => {
+      try {
+        const Message = require('./models/Message');
+        const Conversation = require('./models/Conversation');
+
+        // Find all conversations this user is in
+        const conversations = await Conversation.find({
+          participants: userId,
+        }).lean();
+
+        for (const conv of conversations) {
+          // Update all sent (not yet delivered) messages from others
+          const updated = await Message.updateMany(
+            {
+              conversation: conv._id,
+              sender: { $ne: userId },
+              status: 'sent',
+            },
+            {
+              $set: { status: 'delivered', deliveredAt: new Date() },
+            },
+          );
+
+          if (updated.modifiedCount > 0) {
+            // Notify the sender
+            const senderId = conv.participants.find(
+              (p) => p.toString() !== userId,
+            );
+            if (senderId) {
+              io.to(`user:${senderId.toString()}`).emit('message_status', {
+                conversationId: conv._id.toString(),
+                status: 'delivered',
+                deliveredAt: new Date(),
+                bulk: true,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[WS] Auto-deliver error:', err.message);
+      }
+    };
+
+    markDeliveredOnConnect();
+
     // ----- Disconnect -----
     socket.on('disconnect', () => {
       console.log(`[WS] User disconnected: ${userId} (socket: ${socket.id})`);
@@ -101,6 +167,8 @@ function initSocket(httpServer) {
         sockets.delete(socket.id);
         if (sockets.size === 0) {
           userSockets.delete(userId);
+          // Update lastSeen when fully offline (no remaining sockets)
+          updateLastSeen(userId);
         }
       }
     });
