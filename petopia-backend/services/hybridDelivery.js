@@ -18,8 +18,13 @@
  *  - Heartbeat via Socket.IO ping/pong (already configured at 25s interval)
  */
 
-const { isUserOnline, sendToUser } = require('../socket');
+// NOTE: socket.js is lazy-required inside functions to break the
+// circular dependency (socket.js → hybridDelivery.js → socket.js).
 const User = require('../models/User');
+
+function _socket() {
+  return require('../socket');
+}
 
 // ========================================
 // FCM Admin (lazy-init)
@@ -45,7 +50,17 @@ function initFCM() {
     // Try to load service account from env or file
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (serviceAccountPath) {
-      const serviceAccount = require(serviceAccountPath);
+      const path = require('path');
+      const fs = require('fs');
+      // Resolve to absolute path within current project, validate it stays in config/
+      const resolved = path.resolve(__dirname, '..', serviceAccountPath);
+      const configDir = path.resolve(__dirname, '..', 'config');
+      if (!resolved.startsWith(configDir)) {
+        throw new Error(
+          'Firebase service account path must be within the config/ directory',
+        );
+      }
+      const serviceAccount = JSON.parse(fs.readFileSync(resolved, 'utf8'));
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
       });
@@ -66,7 +81,9 @@ function initFCM() {
     }
   } catch (err) {
     console.warn('[FCM] Failed to initialize:', err.message);
-    console.log('[FCM] Push notifications disabled — app will use socket-only delivery');
+    console.log(
+      '[FCM] Push notifications disabled — app will use socket-only delivery',
+    );
   }
 }
 
@@ -107,6 +124,7 @@ async function deliver(userId, event, data, options = {}) {
     priority = 'high',
   } = options;
 
+  const { isUserOnline, sendToUser } = _socket();
   const online = isUserOnline(userId);
 
   // 1. Always try socket delivery (instant, zero battery cost)
@@ -241,6 +259,7 @@ async function deliverChatMessage(recipientId, messageData, conversationData) {
     'new_message',
     {
       message: messageData,
+      conversationId: conversationData?._id?.toString() || '',
       conversation: conversationData,
     },
     {
@@ -283,7 +302,9 @@ async function deliverNotification(userId, notification) {
   await deliver(userId, 'notification', notification, {
     pushTitle: notification.title || 'Petopia',
     pushBody:
-      notification.message || notification.body || 'You have a new notification',
+      notification.message ||
+      notification.body ||
+      'You have a new notification',
     pushData: {
       type: 'notification',
       notificationId: notification._id?.toString() || '',
@@ -304,7 +325,10 @@ async function updateLastSeen(userId) {
   try {
     await User.findByIdAndUpdate(userId, { lastSeen: new Date() });
   } catch (err) {
-    console.error(`[Presence] Failed to update lastSeen for ${userId}:`, err.message);
+    console.error(
+      `[Presence] Failed to update lastSeen for ${userId}:`,
+      err.message,
+    );
   }
 }
 
@@ -312,6 +336,7 @@ async function updateLastSeen(userId) {
  * Get a user's online status and last seen time.
  */
 async function getPresence(userId) {
+  const { isUserOnline } = _socket();
   const online = isUserOnline(userId);
   if (online) {
     return { online: true, lastSeen: null };

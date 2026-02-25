@@ -81,7 +81,7 @@ router.post('/', async (req, res) => {
     console.error('Create pet error:', error);
     res
       .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+      .json({ success: false, message: 'Server error' });
   }
 });
 
@@ -128,7 +128,7 @@ router.put('/:id', async (req, res) => {
     console.error('Update pet error:', error);
     res
       .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+      .json({ success: false, message: 'Server error' });
   }
 });
 

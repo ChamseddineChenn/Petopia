@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(protect);
 
 // ========================================
-// GET /api/notifications — Get user's notifications
+// GET /api/notifications â€” Get user's notifications
 // ========================================
 router.get('/', async (req, res) => {
   try {
@@ -39,12 +39,12 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Get notifications error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/notifications/unread-count — Quick badge count
+// GET /api/notifications/unread-count â€” Quick badge count
 // ========================================
 router.get('/unread-count', async (req, res) => {
   try {
@@ -54,12 +54,12 @@ router.get('/unread-count', async (req, res) => {
     });
     res.json({ success: true, count });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// PUT /api/notifications/:id/read — Mark one as read
+// PUT /api/notifications/:id/read â€” Mark one as read
 // ========================================
 router.put('/:id/read', async (req, res) => {
   try {
@@ -77,12 +77,12 @@ router.put('/:id/read', async (req, res) => {
 
     res.json({ success: true, notification });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// PUT /api/notifications/read-all — Mark all as read
+// PUT /api/notifications/read-all â€” Mark all as read
 // ========================================
 router.put('/read-all', async (req, res) => {
   try {
@@ -92,7 +92,7 @@ router.put('/read-all', async (req, res) => {
     );
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

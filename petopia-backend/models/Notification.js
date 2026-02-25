@@ -25,17 +25,27 @@ const notificationSchema = new mongoose.Schema(
         'new_follower', // someone followed you (public profile)
         'follow_request', // someone requested to follow you (private profile)
         'follow_request_accepted', // your follow request was accepted
+        'post_liked', // someone liked your post
+        'post_commented', // someone commented on your post
+        'post_shared', // someone shared your post
+        'comment_liked', // someone liked your comment
+        'product_purchased', // someone bought product from shop
+        'low_stock_alert', // product stock is running low
+        'wallet_top_up', // user topped up their wallet
+        'wallet_purchase', // deducted from wallet for a purchase
       ],
     },
     title: {
       type: String,
       required: true,
       trim: true,
+      maxlength: [200, 'Title cannot exceed 200 characters'],
     },
     body: {
       type: String,
       required: true,
       trim: true,
+      maxlength: [2000, 'Body cannot exceed 2000 characters'],
     },
     data: {
       appointmentId: {
@@ -61,6 +71,30 @@ const notificationSchema = new mongoose.Schema(
       userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
+        default: null,
+      },
+      postId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Post',
+        default: null,
+      },
+      commentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Comment',
+        default: null,
+      },
+      productId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Product',
+        default: null,
+      },
+      shopId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PetShop',
+        default: null,
+      },
+      extra: {
+        type: mongoose.Schema.Types.Mixed,
         default: null,
       },
     },

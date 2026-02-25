@@ -36,7 +36,11 @@ const conversationSchema = new mongoose.Schema(
         default: null,
       },
       shopName: { type: String, default: null },
-      shopOwnerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      shopOwnerId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
     },
   },
   {

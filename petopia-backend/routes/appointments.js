@@ -3,9 +3,11 @@ const Appointment = require('../models/Appointment');
 const VetClinic = require('../models/VetClinic');
 const Pet = require('../models/Pet');
 const User = require('../models/User');
+const WalletTransaction = require('../models/WalletTransaction');
 const Notification = require('../models/Notification');
 const { protect } = require('../middleware/auth');
 const { sendToUser, broadcastSlotUpdate } = require('../socket');
+const { calculateCommission } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -73,7 +75,7 @@ function generateTimeSlots(workingHours, duration, date) {
 }
 
 // ========================================
-// GET /api/appointments/slots/:clinicId — Available slots for a date
+// GET /api/appointments/slots/:clinicId â€” Available slots for a date
 // ========================================
 router.get('/slots/:clinicId', protect, async (req, res) => {
   try {
@@ -126,12 +128,12 @@ router.get('/slots/:clinicId', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Get slots error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// POST /api/appointments — Book an appointment
+// POST /api/appointments â€” Book an appointment
 // ========================================
 router.post('/', protect, async (req, res) => {
   try {
@@ -160,6 +162,16 @@ router.post('/', protect, async (req, res) => {
       });
     }
 
+    // Verify pet ownership â€” user can only book for their own pets
+    const Pet = require('../models/Pet');
+    const pet = await Pet.findById(petId);
+    if (!pet || pet.owner.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to book for this pet',
+      });
+    }
+
     // Find the service in clinic's service list
     const clinicService = clinic.services.find(
       (s) => s.name.toLowerCase() === serviceName.toLowerCase(),
@@ -181,6 +193,40 @@ router.post('/', protect, async (req, res) => {
         .json({ success: false, message: 'This time slot is already booked' });
     }
 
+    // ── Pet Dollar reservation (funds held until vet accepts/declines) ──
+    const servicePrice = clinicService?.price;
+    if (!servicePrice || servicePrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'This service does not have a valid price. Cannot book.',
+      });
+    }
+
+    const price = Math.round(servicePrice * 100) / 100;
+
+    // Check buyer balance
+    const buyer = await User.findById(req.user.id).select('petDollars');
+    if (!buyer || buyer.petDollars < price) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient Pet Dollars. You have P$${(buyer?.petDollars || 0).toFixed(2)} but need P$${price.toFixed(2)}`,
+        balance: buyer?.petDollars || 0,
+      });
+    }
+
+    // Atomic deduct from buyer (reserve funds)
+    const updatedBuyer = await User.findOneAndUpdate(
+      { _id: req.user.id, petDollars: { $gte: price } },
+      { $inc: { petDollars: -price } },
+      { new: true, select: 'petDollars' },
+    );
+    if (!updatedBuyer) {
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient balance or concurrent transaction. Please try again.',
+      });
+    }
+
     const appointment = await Appointment.create({
       clinic: clinicId,
       vet: clinic.owner,
@@ -194,6 +240,26 @@ router.post('/', protect, async (req, res) => {
         price: clinicService?.price || null,
       },
       reason: reason || '',
+      status: 'pending',
+    });
+
+    // Record reservation transaction (funds held, not yet transferred to vet)
+    await WalletTransaction.create({
+      user: req.user.id,
+      type: 'reservation',
+      amount: -price,
+      balanceAfter: updatedBuyer.petDollars,
+      description: `Reserved P$${price.toFixed(2)} for vet appointment — ${serviceName} at ${clinic.clinicName}`,
+      reference: {
+        entityType: 'vet_appointment',
+        entityId: appointment._id,
+      },
+      commission: {
+        rate: 0.07,
+        platformAmount: null, // calculated upon acceptance
+        sellerAmount: null,
+        sellerId: clinic.owner,
+      },
       status: 'pending',
     });
 
@@ -247,19 +313,19 @@ router.post('/', protect, async (req, res) => {
         .status(400)
         .json({ success: false, message: 'This time slot is already booked' });
     }
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/appointments/my — User's appointments
+// GET /api/appointments/my â€” User's appointments
 // ========================================
 router.get('/my', protect, async (req, res) => {
   try {
     const { status, upcoming } = req.query;
     const filter = { user: req.user.id };
 
-    if (status) {
+    if (typeof status === 'string') {
       filter.status = status;
     }
 
@@ -278,12 +344,12 @@ router.get('/my', protect, async (req, res) => {
     res.json({ success: true, appointments });
   } catch (error) {
     console.error('Get my appointments error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/appointments/vet — Vet's appointments
+// GET /api/appointments/vet â€” Vet's appointments
 // ========================================
 router.get('/vet', protect, async (req, res) => {
   try {
@@ -297,7 +363,7 @@ router.get('/vet', protect, async (req, res) => {
       filter.date = { $gte: targetDate, $lt: nextDay };
     }
 
-    if (status) {
+    if (typeof status === 'string') {
       filter.status = status;
     }
 
@@ -311,12 +377,12 @@ router.get('/vet', protect, async (req, res) => {
     res.json({ success: true, appointments });
   } catch (error) {
     console.error('Get vet appointments error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// PUT /api/appointments/:id/status — Update status
+// PUT /api/appointments/:id/status â€” Update status
 // ========================================
 router.put('/:id/status', protect, async (req, res) => {
   try {
@@ -373,6 +439,116 @@ router.put('/:id/status', protect, async (req, res) => {
     }
 
     await appointment.save();
+
+    // ── Financial logic based on status transition ──
+    const servicePrice = appointment.service?.price;
+    if (servicePrice && servicePrice > 0) {
+      const price = Math.round(servicePrice * 100) / 100;
+
+      if (status === 'confirmed') {
+        // ACCEPT: Transfer reserved funds to vet (93%) — platform keeps 7%
+        const split = calculateCommission(price);
+
+        // Credit the vet
+        const updatedVet = await User.findByIdAndUpdate(
+          appointment.vet,
+          { $inc: { petDollars: split.sellerAmount } },
+          { new: true, select: 'petDollars' },
+        );
+
+        // Mark reservation as completed
+        await WalletTransaction.findOneAndUpdate(
+          {
+            'reference.entityId': appointment._id,
+            'reference.entityType': 'vet_appointment',
+            type: 'reservation',
+            status: 'pending',
+          },
+          { status: 'completed' },
+        );
+
+        // Record buyer's finalized purchase transaction
+        const buyer = await User.findById(appointment.user).select('petDollars');
+        await WalletTransaction.create({
+          user: appointment.user,
+          type: 'purchase',
+          amount: -price,
+          balanceAfter: buyer?.petDollars ?? 0,
+          description: `Vet appointment confirmed — ${appointment.service.name}`,
+          reference: {
+            entityType: 'vet_appointment',
+            entityId: appointment._id,
+          },
+          commission: {
+            rate: split.commissionRate,
+            platformAmount: split.platformAmount,
+            sellerAmount: split.sellerAmount,
+            sellerId: appointment.vet,
+          },
+          status: 'completed',
+        });
+
+        // Record vet's incoming transaction
+        if (updatedVet) {
+          await WalletTransaction.create({
+            user: appointment.vet,
+            type: 'transfer_in',
+            amount: split.sellerAmount,
+            balanceAfter: updatedVet.petDollars,
+            description: `Appointment payment — ${appointment.service.name} (P$${price.toFixed(2)}, 7% platform fee deducted)`,
+            reference: {
+              entityType: 'vet_appointment',
+              entityId: appointment._id,
+            },
+            commission: {
+              rate: split.commissionRate,
+              platformAmount: split.platformAmount,
+              sellerAmount: split.sellerAmount,
+              sellerId: appointment.vet,
+            },
+            status: 'completed',
+          });
+        }
+      } else if (status === 'cancelled' && appointment.cancelledBy) {
+        // CANCEL/DECLINE: Refund reserved funds to pet owner
+        // Only refund if the appointment was pending (funds were reserved)
+        const reservationTx = await WalletTransaction.findOne({
+          'reference.entityId': appointment._id,
+          'reference.entityType': 'vet_appointment',
+          type: 'reservation',
+          status: 'pending',
+        });
+
+        if (reservationTx) {
+          const refundAmount = Math.abs(reservationTx.amount);
+          const updatedBuyer = await User.findByIdAndUpdate(
+            appointment.user,
+            { $inc: { petDollars: refundAmount } },
+            { new: true, select: 'petDollars' },
+          );
+
+          // Mark reservation as reversed
+          reservationTx.status = 'reversed';
+          await reservationTx.save();
+
+          // Record refund transaction
+          if (updatedBuyer) {
+            await WalletTransaction.create({
+              user: appointment.user,
+              type: 'refund',
+              amount: refundAmount,
+              balanceAfter: updatedBuyer.petDollars,
+              description: `Refund — vet appointment ${isVet ? 'declined' : 'cancelled'} (${appointment.service.name})`,
+              reference: {
+                entityType: 'vet_appointment',
+                entityId: appointment._id,
+              },
+              status: 'completed',
+            });
+          }
+        }
+      }
+    }
 
     const populated = await Appointment.findById(appointment._id)
       .populate('clinic', 'clinicName phone address')
@@ -448,12 +624,12 @@ router.put('/:id/status', protect, async (req, res) => {
     res.json({ success: true, appointment: populated });
   } catch (error) {
     console.error('Update appointment status error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/appointments/vet/clients — Vet's client list (pets with confirmed/completed appointments)
+// GET /api/appointments/vet/clients â€” Vet's client list (pets with confirmed/completed appointments)
 // ========================================
 router.get('/vet/clients', protect, async (req, res) => {
   try {
@@ -498,12 +674,12 @@ router.get('/vet/clients', protect, async (req, res) => {
     res.json({ success: true, clients });
   } catch (error) {
     console.error('Get vet clients error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/appointments/vet/pet/:petId/records — Vet can view a client pet's health records
+// GET /api/appointments/vet/pet/:petId/records â€” Vet can view a client pet's health records
 // ========================================
 const HealthRecord = require('../models/HealthRecord');
 
@@ -536,12 +712,12 @@ router.get('/vet/pet/:petId/records', protect, async (req, res) => {
     res.json({ success: true, records, pet });
   } catch (error) {
     console.error('Get vet pet records error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// POST /api/appointments/vet/pet/:petId/records — Vet can add a health record for a client's pet
+// POST /api/appointments/vet/pet/:petId/records â€” Vet can add a health record for a client's pet
 // ========================================
 router.post('/vet/pet/:petId/records', protect, async (req, res) => {
   try {
@@ -564,8 +740,30 @@ router.post('/vet/pet/:petId/records', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Pet not found' });
     }
 
+    const ALLOWED_HEALTH_RECORD_FIELDS = [
+      'recordType',
+      'title',
+      'description',
+      'date',
+      'veterinarian',
+      'vaccination',
+      'examination',
+      'laboratory',
+      'prescription',
+      'surgery',
+      'attachments',
+      'notes',
+      'followUpDate',
+      'followUpNotes',
+      'cost',
+    ];
+    const picked = {};
+    for (const key of ALLOWED_HEALTH_RECORD_FIELDS) {
+      if (req.body[key] !== undefined) picked[key] = req.body[key];
+    }
+
     const record = await HealthRecord.create({
-      ...req.body,
+      ...picked,
       pet: req.params.petId,
       owner: pet.owner, // The pet's actual owner
     });
@@ -593,9 +791,7 @@ router.post('/vet/pet/:petId/records', protect, async (req, res) => {
     res.status(201).json({ success: true, record });
   } catch (error) {
     console.error('Vet create health record error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

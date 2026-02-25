@@ -3,9 +3,11 @@ const GroomerAppointment = require('../models/GroomerAppointment');
 const GroomerShop = require('../models/GroomerShop');
 const Pet = require('../models/Pet');
 const User = require('../models/User');
+const WalletTransaction = require('../models/WalletTransaction');
 const Notification = require('../models/Notification');
 const { protect } = require('../middleware/auth');
 const { sendToUser, broadcastSlotUpdate } = require('../socket');
+const { calculateCommission } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -72,7 +74,7 @@ function generateTimeSlots(workingHours, duration, date) {
 }
 
 // ========================================
-// GET /api/groomer-appointments/slots/:shopId — Available slots for a date
+// GET /api/groomer-appointments/slots/:shopId â€” Available slots for a date
 // ========================================
 router.get('/slots/:shopId', protect, async (req, res) => {
   try {
@@ -122,12 +124,12 @@ router.get('/slots/:shopId', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Get groomer slots error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// POST /api/groomer-appointments — Book a grooming appointment
+// POST /api/groomer-appointments â€” Book a grooming appointment
 // ========================================
 router.post('/', protect, async (req, res) => {
   try {
@@ -155,6 +157,16 @@ router.post('/', protect, async (req, res) => {
       });
     }
 
+    // Verify pet ownership â€” user can only book for their own pets
+    const Pet = require('../models/Pet');
+    const pet = await Pet.findById(petId);
+    if (!pet || pet.owner.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to book for this pet',
+      });
+    }
+
     const shopService = shop.services.find(
       (s) => s.name.toLowerCase() === serviceName.toLowerCase(),
     );
@@ -174,6 +186,40 @@ router.post('/', protect, async (req, res) => {
         .json({ success: false, message: 'This time slot is already booked' });
     }
 
+    // ── Pet Dollar reservation (funds held until groomer accepts/declines) ──
+    const servicePrice = shopService?.price;
+    if (!servicePrice || servicePrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'This service does not have a valid price. Cannot book.',
+      });
+    }
+
+    const price = Math.round(servicePrice * 100) / 100;
+
+    // Check buyer balance
+    const buyer = await User.findById(req.user.id).select('petDollars');
+    if (!buyer || buyer.petDollars < price) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient Pet Dollars. You have P$${(buyer?.petDollars || 0).toFixed(2)} but need P$${price.toFixed(2)}`,
+        balance: buyer?.petDollars || 0,
+      });
+    }
+
+    // Atomic deduct from buyer (reserve funds)
+    const updatedBuyer = await User.findOneAndUpdate(
+      { _id: req.user.id, petDollars: { $gte: price } },
+      { $inc: { petDollars: -price } },
+      { new: true, select: 'petDollars' },
+    );
+    if (!updatedBuyer) {
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient balance or concurrent transaction. Please try again.',
+      });
+    }
+
     const appointment = await GroomerAppointment.create({
       shop: shopId,
       groomer: shop.owner,
@@ -187,6 +233,26 @@ router.post('/', protect, async (req, res) => {
         price: shopService?.price || null,
       },
       reason: reason || '',
+      status: 'pending',
+    });
+
+    // Record reservation transaction (funds held, not yet transferred to groomer)
+    await WalletTransaction.create({
+      user: req.user.id,
+      type: 'reservation',
+      amount: -price,
+      balanceAfter: updatedBuyer.petDollars,
+      description: `Reserved P$${price.toFixed(2)} for grooming — ${serviceName} at ${shop.shopName}`,
+      reference: {
+        entityType: 'groomer_appointment',
+        entityId: appointment._id,
+      },
+      commission: {
+        rate: 0.07,
+        platformAmount: null,
+        sellerAmount: null,
+        sellerId: shop.owner,
+      },
       status: 'pending',
     });
 
@@ -234,19 +300,19 @@ router.post('/', protect, async (req, res) => {
         .status(400)
         .json({ success: false, message: 'This time slot is already booked' });
     }
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/groomer-appointments/my — User's grooming appointments
+// GET /api/groomer-appointments/my â€” User's grooming appointments
 // ========================================
 router.get('/my', protect, async (req, res) => {
   try {
     const { status, upcoming } = req.query;
     const filter = { user: req.user.id };
 
-    if (status) {
+    if (typeof status === 'string') {
       filter.status = status;
     }
 
@@ -265,12 +331,12 @@ router.get('/my', protect, async (req, res) => {
     res.json({ success: true, appointments });
   } catch (error) {
     console.error('Get my groomer appointments error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/groomer-appointments/groomer — Groomer's appointments
+// GET /api/groomer-appointments/groomer â€” Groomer's appointments
 // ========================================
 router.get('/groomer', protect, async (req, res) => {
   try {
@@ -284,7 +350,7 @@ router.get('/groomer', protect, async (req, res) => {
       filter.date = { $gte: targetDate, $lt: nextDay };
     }
 
-    if (status) {
+    if (typeof status === 'string') {
       filter.status = status;
     }
 
@@ -298,12 +364,12 @@ router.get('/groomer', protect, async (req, res) => {
     res.json({ success: true, appointments });
   } catch (error) {
     console.error('Get groomer appointments error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// PUT /api/groomer-appointments/:id/status — Update status
+// PUT /api/groomer-appointments/:id/status â€” Update status
 // ========================================
 router.put('/:id/status', protect, async (req, res) => {
   try {
@@ -358,6 +424,115 @@ router.put('/:id/status', protect, async (req, res) => {
     }
 
     await appointment.save();
+
+    // ── Financial logic based on status transition ──
+    const servicePrice = appointment.service?.price;
+    if (servicePrice && servicePrice > 0) {
+      const price = Math.round(servicePrice * 100) / 100;
+
+      if (status === 'confirmed') {
+        // ACCEPT: Transfer reserved funds to groomer (93%) — platform keeps 7%
+        const split = calculateCommission(price);
+
+        // Credit the groomer
+        const updatedGroomer = await User.findByIdAndUpdate(
+          appointment.groomer,
+          { $inc: { petDollars: split.sellerAmount } },
+          { new: true, select: 'petDollars' },
+        );
+
+        // Mark reservation as completed
+        await WalletTransaction.findOneAndUpdate(
+          {
+            'reference.entityId': appointment._id,
+            'reference.entityType': 'groomer_appointment',
+            type: 'reservation',
+            status: 'pending',
+          },
+          { status: 'completed' },
+        );
+
+        // Record buyer's finalized purchase transaction
+        const buyer = await User.findById(appointment.user).select('petDollars');
+        await WalletTransaction.create({
+          user: appointment.user,
+          type: 'purchase',
+          amount: -price,
+          balanceAfter: buyer?.petDollars ?? 0,
+          description: `Grooming appointment confirmed — ${appointment.service.name}`,
+          reference: {
+            entityType: 'groomer_appointment',
+            entityId: appointment._id,
+          },
+          commission: {
+            rate: split.commissionRate,
+            platformAmount: split.platformAmount,
+            sellerAmount: split.sellerAmount,
+            sellerId: appointment.groomer,
+          },
+          status: 'completed',
+        });
+
+        // Record groomer's incoming transaction
+        if (updatedGroomer) {
+          await WalletTransaction.create({
+            user: appointment.groomer,
+            type: 'transfer_in',
+            amount: split.sellerAmount,
+            balanceAfter: updatedGroomer.petDollars,
+            description: `Grooming payment — ${appointment.service.name} (P$${price.toFixed(2)}, 7% platform fee deducted)`,
+            reference: {
+              entityType: 'groomer_appointment',
+              entityId: appointment._id,
+            },
+            commission: {
+              rate: split.commissionRate,
+              platformAmount: split.platformAmount,
+              sellerAmount: split.sellerAmount,
+              sellerId: appointment.groomer,
+            },
+            status: 'completed',
+          });
+        }
+      } else if (status === 'cancelled' && appointment.cancelledBy) {
+        // CANCEL/DECLINE: Refund reserved funds to pet owner
+        const reservationTx = await WalletTransaction.findOne({
+          'reference.entityId': appointment._id,
+          'reference.entityType': 'groomer_appointment',
+          type: 'reservation',
+          status: 'pending',
+        });
+
+        if (reservationTx) {
+          const refundAmount = Math.abs(reservationTx.amount);
+          const updatedBuyer = await User.findByIdAndUpdate(
+            appointment.user,
+            { $inc: { petDollars: refundAmount } },
+            { new: true, select: 'petDollars' },
+          );
+
+          // Mark reservation as reversed
+          reservationTx.status = 'reversed';
+          await reservationTx.save();
+
+          // Record refund transaction
+          if (updatedBuyer) {
+            await WalletTransaction.create({
+              user: appointment.user,
+              type: 'refund',
+              amount: refundAmount,
+              balanceAfter: updatedBuyer.petDollars,
+              description: `Refund — grooming appointment ${isGroomer ? 'declined' : 'cancelled'} (${appointment.service.name})`,
+              reference: {
+                entityType: 'groomer_appointment',
+                entityId: appointment._id,
+              },
+              status: 'completed',
+            });
+          }
+        }
+      }
+    }
 
     const populated = await GroomerAppointment.findById(appointment._id)
       .populate('shop', 'shopName phone address')
@@ -424,12 +599,12 @@ router.put('/:id/status', protect, async (req, res) => {
     res.json({ success: true, appointment: populated });
   } catch (error) {
     console.error('Update groomer appointment status error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 // ========================================
-// GET /api/groomer-appointments/groomer/clients — Groomer's client list
+// GET /api/groomer-appointments/groomer/clients â€” Groomer's client list
 // ========================================
 router.get('/groomer/clients', protect, async (req, res) => {
   try {
@@ -472,7 +647,7 @@ router.get('/groomer/clients', protect, async (req, res) => {
     res.json({ success: true, clients });
   } catch (error) {
     console.error('Get groomer clients error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

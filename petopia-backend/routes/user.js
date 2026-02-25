@@ -184,9 +184,7 @@ router.put('/profile', async (req, res) => {
     res.json({ success: true, user });
   } catch (error) {
     console.error('Update profile error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -203,10 +201,22 @@ router.put('/change-password', async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (newPassword.length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'New password must be at least 6 characters',
+        message: 'New password must be at least 8 characters',
+      });
+    }
+
+    // Password complexity: must include uppercase, lowercase, and digit
+    if (
+      !/[A-Z]/.test(newPassword) ||
+      !/[a-z]/.test(newPassword) ||
+      !/[0-9]/.test(newPassword)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must include uppercase, lowercase, and a number',
       });
     }
 
@@ -234,6 +244,13 @@ router.delete('/account', async (req, res) => {
   try {
     const { password } = req.body;
 
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required to delete account',
+      });
+    }
+
     const user = await User.findById(req.user.id).select('+password');
     if (!user) {
       return res
@@ -241,13 +258,11 @@ router.delete('/account', async (req, res) => {
         .json({ success: false, message: 'User not found' });
     }
 
-    if (password) {
-      const isMatch = await user.matchPassword(password);
-      if (!isMatch) {
-        return res
-          .status(401)
-          .json({ success: false, message: 'Password is incorrect' });
-      }
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res
+        .status(401)
+        .json({ success: false, message: 'Password is incorrect' });
     }
 
     // Delete all user's pets and posts
@@ -570,14 +585,29 @@ router.get('/privacy', async (req, res) => {
 router.get('/:userId/followers', protect, async (req, res) => {
   try {
     const user = await User.findById(req.params.userId)
-      .populate('followers', 'name profileImage bio')
+      .select('followers isPrivate')
       .lean();
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, users: user.followers || [] });
+
+    // Privacy check: only the owner or a follower can see a private profile's followers
+    const isOwner = req.user.id === req.params.userId;
+    const isFollower = (user.followers || []).some(
+      (f) => f.toString() === req.user.id,
+    );
+    if (user.isPrivate && !isOwner && !isFollower) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'This account is private' });
+    }
+
+    const populated = await User.findById(req.params.userId)
+      .populate('followers', 'name profileImage bio')
+      .lean();
+    res.json({ success: true, users: populated.followers || [] });
   } catch (error) {
     console.error('Get followers error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -588,14 +618,29 @@ router.get('/:userId/followers', protect, async (req, res) => {
 router.get('/:userId/following', protect, async (req, res) => {
   try {
     const user = await User.findById(req.params.userId)
-      .populate('following', 'name profileImage bio')
+      .select('following followers isPrivate')
       .lean();
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: 'User not found' });
     }
-    res.json({ success: true, users: user.following || [] });
+
+    // Privacy check
+    const isOwner = req.user.id === req.params.userId;
+    const isFollower = (user.followers || []).some(
+      (f) => f.toString() === req.user.id,
+    );
+    if (user.isPrivate && !isOwner && !isFollower) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'This account is private' });
+    }
+
+    const populated = await User.findById(req.params.userId)
+      .populate('following', 'name profileImage bio')
+      .lean();
+    res.json({ success: true, users: populated.following || [] });
   } catch (error) {
     console.error('Get following error:', error);
     res.status(500).json({ success: false, message: 'Server error' });

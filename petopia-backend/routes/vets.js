@@ -9,7 +9,7 @@ const router = express.Router();
 // PUBLIC ROUTES
 // ========================================
 
-// GET /api/vets — List all clinics (sorted by rating or distance)
+// GET /api/vets â€” List all clinics (sorted by rating or distance)
 router.get('/', async (req, res) => {
   try {
     const {
@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
     const filter = { isActive: true };
 
     // Filter by pet type
-    if (petType) {
+    if (typeof petType === 'string') {
       filter.acceptedPetTypes = petType;
     }
 
@@ -39,12 +39,12 @@ router.get('/', async (req, res) => {
     }
 
     // Filter by service category
-    if (service) {
+    if (typeof service === 'string') {
       filter['services.category'] = service;
     }
 
     // Text search
-    if (search) {
+    if (typeof search === 'string' && search.trim()) {
       filter.$text = { $search: search };
     }
 
@@ -95,11 +95,11 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Get clinics error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/vets/my/clinic — Get current user's clinic
+// GET /api/vets/my/clinic â€” Get current user's clinic
 // (Must be before /:id to prevent "my" being treated as an id)
 router.get('/my/clinic', protect, async (req, res) => {
   try {
@@ -117,11 +117,11 @@ router.get('/my/clinic', protect, async (req, res) => {
     res.json({ success: true, clinic });
   } catch (error) {
     console.error('Get my clinic error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/vets/:id — Get single clinic detail
+// GET /api/vets/:id â€” Get single clinic detail
 router.get('/:id', async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.id)
@@ -137,7 +137,7 @@ router.get('/:id', async (req, res) => {
     res.json({ success: true, clinic });
   } catch (error) {
     console.error('Get clinic error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -145,7 +145,7 @@ router.get('/:id', async (req, res) => {
 // PROTECTED ROUTES (require auth)
 // ========================================
 
-// POST /api/vets — Create a clinic (user becomes vet)
+// POST /api/vets â€” Create a clinic (user becomes vet)
 router.post('/', protect, async (req, res) => {
   try {
     const {
@@ -224,11 +224,11 @@ router.post('/', protect, async (req, res) => {
     res.status(201).json({ success: true, clinic });
   } catch (error) {
     console.error('Create clinic error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// PUT /api/vets/:id — Update clinic
+// PUT /api/vets/:id â€” Update clinic
 router.put('/:id', protect, async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.id);
@@ -286,11 +286,11 @@ router.put('/:id', protect, async (req, res) => {
     res.json({ success: true, clinic: updated });
   } catch (error) {
     console.error('Update clinic error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/vets/:id/photos — Add photos to clinic
+// POST /api/vets/:id/photos â€” Add photos to clinic
 router.post('/:id/photos', protect, async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.id);
@@ -320,11 +320,11 @@ router.post('/:id/photos', protect, async (req, res) => {
     res.json({ success: true, photos: clinic.photos });
   } catch (error) {
     console.error('Add photos error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/vets/:id/photos/:photoId — Remove a photo
+// DELETE /api/vets/:id/photos/:photoId â€” Remove a photo
 router.delete('/:id/photos/:photoId', protect, async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.id);
@@ -349,11 +349,11 @@ router.delete('/:id/photos/:photoId', protect, async (req, res) => {
     res.json({ success: true, photos: clinic.photos });
   } catch (error) {
     console.error('Delete photo error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/vets/:id — Delete clinic
+// DELETE /api/vets/:id â€” Delete clinic
 router.delete('/:id', protect, async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.id);
@@ -378,7 +378,7 @@ router.delete('/:id', protect, async (req, res) => {
     res.json({ success: true, message: 'Clinic deleted' });
   } catch (error) {
     console.error('Delete clinic error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

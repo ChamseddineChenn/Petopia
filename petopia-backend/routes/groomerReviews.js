@@ -6,7 +6,7 @@ const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/groomer-reviews/:shopId — Get all reviews for a groomer shop
+// GET /api/groomer-reviews/:shopId â€” Get all reviews for a groomer shop
 router.get('/:shopId', async (req, res) => {
   try {
     const { page = 1, limit = 20, sort = 'newest' } = req.query;
@@ -69,11 +69,11 @@ router.get('/:shopId', async (req, res) => {
     });
   } catch (error) {
     console.error('Get groomer reviews error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/groomer-reviews/:shopId/can-review — Check if user can leave a review
+// GET /api/groomer-reviews/:shopId/can-review â€” Check if user can leave a review
 router.get('/:shopId/can-review', protect, async (req, res) => {
   try {
     const existing = await GroomerReview.findOne({
@@ -96,11 +96,11 @@ router.get('/:shopId/can-review', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Can review check error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/groomer-reviews/:shopId — Create a review
+// POST /api/groomer-reviews/:shopId â€” Create a review
 router.post('/:shopId', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.shopId);
@@ -172,11 +172,11 @@ router.post('/:shopId', protect, async (req, res) => {
         message: 'You have already reviewed this shop',
       });
     }
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// PUT /api/groomer-reviews/:reviewId — Update own review
+// PUT /api/groomer-reviews/:reviewId â€” Update own review
 router.put('/:reviewId', protect, async (req, res) => {
   try {
     const review = await GroomerReview.findById(req.params.reviewId);
@@ -208,11 +208,11 @@ router.put('/:reviewId', protect, async (req, res) => {
     res.json({ success: true, review: populated });
   } catch (error) {
     console.error('Update groomer review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/groomer-reviews/:reviewId — Delete own review
+// DELETE /api/groomer-reviews/:reviewId â€” Delete own review
 router.delete('/:reviewId', protect, async (req, res) => {
   try {
     const review = await GroomerReview.findById(req.params.reviewId);
@@ -234,11 +234,11 @@ router.delete('/:reviewId', protect, async (req, res) => {
     res.json({ success: true, message: 'Review deleted' });
   } catch (error) {
     console.error('Delete groomer review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/groomer-reviews/:reviewId/helpful — Toggle helpful vote
+// POST /api/groomer-reviews/:reviewId/helpful â€” Toggle helpful vote
 router.post('/:reviewId/helpful', protect, async (req, res) => {
   try {
     const review = await GroomerReview.findById(req.params.reviewId);
@@ -265,11 +265,11 @@ router.post('/:reviewId/helpful', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Helpful vote error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/groomer-reviews/:reviewId/respond — Groomer responds to a review
+// POST /api/groomer-reviews/:reviewId/respond â€” Groomer responds to a review
 router.post('/:reviewId/respond', protect, async (req, res) => {
   try {
     const review = await GroomerReview.findById(req.params.reviewId).populate(
@@ -306,7 +306,7 @@ router.post('/:reviewId/respond', protect, async (req, res) => {
     res.json({ success: true, review: populated });
   } catch (error) {
     console.error('Respond to groomer review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

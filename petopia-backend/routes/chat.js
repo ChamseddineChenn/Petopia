@@ -173,10 +173,14 @@ router.post('/conversations', protect, async (req, res) => {
       }
 
       // Hybrid delivery: socket if online, FCM push if offline
-      deliverChatMessage(recipientId, populated.toObject ? populated.toObject() : populated, {
-        _id: conversation._id,
-        isRequest: !conversation.isAccepted?.get(recipientId),
-      });
+      deliverChatMessage(
+        recipientId,
+        populated.toObject ? populated.toObject() : populated,
+        {
+          _id: conversation._id,
+          isRequest: !conversation.isAccepted?.get(recipientId),
+        },
+      );
     }
 
     // Populate the conversation for return
@@ -374,11 +378,15 @@ router.post('/conversations/:id/messages', protect, async (req, res) => {
     }
 
     // Hybrid delivery: socket if online, FCM push if offline
-    deliverChatMessage(recipientId.toString(), {
-      ...populated.toObject(),
-      status: message.status,
-      deliveredAt: message.deliveredAt,
-    }, { _id: id });
+    deliverChatMessage(
+      recipientId.toString(),
+      {
+        ...populated.toObject(),
+        status: message.status,
+        deliveredAt: message.deliveredAt,
+      },
+      { _id: id },
+    );
 
     res.json({ success: true, message: populated });
   } catch (error) {
@@ -472,11 +480,16 @@ router.put('/conversations/:id/accept', protect, async (req, res) => {
     const otherUserId = conversation.participants.find(
       (p) => p.toString() !== userId,
     );
-    deliver(otherUserId.toString(), 'request_accepted', { conversationId: id }, {
-      pushTitle: 'Message Request Accepted',
-      pushBody: 'Your message request has been accepted!',
-      priority: 'high',
-    });
+    deliver(
+      otherUserId.toString(),
+      'request_accepted',
+      { conversationId: id },
+      {
+        pushTitle: 'Message Request Accepted',
+        pushBody: 'Your message request has been accepted!',
+        priority: 'high',
+      },
+    );
 
     res.json({ success: true, message: 'Message request accepted' });
   } catch (error) {
@@ -587,7 +600,8 @@ router.get('/search-following', protect, async (req, res) => {
     };
 
     if (query.trim()) {
-      filter.name = { $regex: query.trim(), $options: 'i' };
+      const escaped = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.name = { $regex: escaped, $options: 'i' };
     }
 
     const users = await User.find(filter)
@@ -734,7 +748,7 @@ router.delete('/conversations/:id', protect, async (req, res) => {
         .json({ success: false, message: 'Not a participant' });
     }
 
-    await Message.deleteMany({ conversationId });
+    await Message.deleteMany({ conversation: conversationId });
     await Conversation.findByIdAndDelete(conversationId);
 
     res.json({ success: true, message: 'Conversation deleted' });

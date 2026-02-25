@@ -6,7 +6,7 @@ const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/reviews/:clinicId — Get all reviews for a clinic
+// GET /api/reviews/:clinicId â€” Get all reviews for a clinic
 router.get('/:clinicId', async (req, res) => {
   try {
     const { page = 1, limit = 20, sort = 'newest' } = req.query;
@@ -67,11 +67,11 @@ router.get('/:clinicId', async (req, res) => {
     });
   } catch (error) {
     console.error('Get reviews error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/reviews/:clinicId/can-review — Check if user can leave a review
+// GET /api/reviews/:clinicId/can-review â€” Check if user can leave a review
 router.get('/:clinicId/can-review', protect, async (req, res) => {
   try {
     const existing = await Review.findOne({
@@ -94,11 +94,11 @@ router.get('/:clinicId/can-review', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Can review check error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/reviews/:clinicId — Create a review
+// POST /api/reviews/:clinicId â€” Create a review
 router.post('/:clinicId', protect, async (req, res) => {
   try {
     const clinic = await VetClinic.findById(req.params.clinicId);
@@ -172,11 +172,11 @@ router.post('/:clinicId', protect, async (req, res) => {
         message: 'You have already reviewed this clinic',
       });
     }
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// PUT /api/reviews/:reviewId — Update own review
+// PUT /api/reviews/:reviewId â€” Update own review
 router.put('/:reviewId', protect, async (req, res) => {
   try {
     const review = await Review.findById(req.params.reviewId);
@@ -208,11 +208,11 @@ router.put('/:reviewId', protect, async (req, res) => {
     res.json({ success: true, review: populated });
   } catch (error) {
     console.error('Update review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/reviews/:reviewId — Delete own review
+// DELETE /api/reviews/:reviewId â€” Delete own review
 router.delete('/:reviewId', protect, async (req, res) => {
   try {
     const review = await Review.findById(req.params.reviewId);
@@ -234,11 +234,11 @@ router.delete('/:reviewId', protect, async (req, res) => {
     res.json({ success: true, message: 'Review deleted' });
   } catch (error) {
     console.error('Delete review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/reviews/:reviewId/helpful — Toggle helpful vote
+// POST /api/reviews/:reviewId/helpful â€” Toggle helpful vote
 router.post('/:reviewId/helpful', protect, async (req, res) => {
   try {
     const review = await Review.findById(req.params.reviewId);
@@ -265,11 +265,11 @@ router.post('/:reviewId/helpful', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Helpful vote error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/reviews/:reviewId/respond — Vet responds to a review
+// POST /api/reviews/:reviewId/respond â€” Vet responds to a review
 router.post('/:reviewId/respond', protect, async (req, res) => {
   try {
     const review = await Review.findById(req.params.reviewId).populate(
@@ -307,7 +307,7 @@ router.post('/:reviewId/respond', protect, async (req, res) => {
     res.json({ success: true, review: populated });
   } catch (error) {
     console.error('Respond to review error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

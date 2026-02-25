@@ -2,7 +2,23 @@
 const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
+const hpp = require('hpp');
 require('dotenv').config();
+
+// ========================================
+// Startup Guards — fail fast if critical env vars are missing
+// ========================================
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set');
+  process.exit(1);
+}
+if (!process.env.MONGODB_URI) {
+  console.error('FATAL: MONGODB_URI environment variable is not set');
+  process.exit(1);
+}
 
 const { initSocket } = require('./socket');
 const { initFCM } = require('./services/hybridDelivery');
@@ -10,11 +26,57 @@ const { initFCM } = require('./services/hybridDelivery');
 const app = express();
 const server = http.createServer(app);
 
-// Middleware
-app.use(cors());
+// ========================================
+// Security Middleware
+// ========================================
 
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// Set security HTTP headers (X-Content-Type-Options, X-Frame-Options, HSTS, etc.)
+app.use(helmet());
+
+// CORS — restrict to known origins (add your production domain)
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: allowedOrigins.length > 0 ? allowedOrigins : false,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  }),
+);
+
+// Global rate limiter — 100 requests per 15 minutes per IP
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later',
+  },
+});
+app.use(globalLimiter);
+
+// ── Stripe webhook needs raw body BEFORE json parser ──
+// Stripe requires the raw Buffer body to verify webhook signatures.
+// This must be registered before express.json() middleware.
+app.use(
+  '/api/payments/webhook',
+  express.raw({ type: 'application/json', limit: '1mb' }),
+);
+
+// Body parsers — reduced limits (upload routes have their own higher limits)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Sanitize request data — strips $ and . from req.body/query/params to prevent NoSQL injection
+app.use(mongoSanitize());
+
+// Prevent HTTP parameter pollution
+app.use(hpp());
 
 // ========================================
 // MongoDB Connection (auto-reconnect)
@@ -61,6 +123,10 @@ app.use('/api/groomers', require('./routes/groomers'));
 app.use('/api/groomer-reviews', require('./routes/groomerReviews'));
 app.use('/api/groomer-appointments', require('./routes/groomerAppointments'));
 app.use('/api/chat', require('./routes/chat'));
+app.use('/api/shops', require('./routes/shops'));
+app.use('/api/cart', require('./routes/cart'));
+app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/payments', require('./routes/payments'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -105,11 +171,12 @@ setInterval(() => {
 }, 60000); // ping every 60s
 
 // ========================================
-// Crash guards — never let the process die
+// Crash guards — log and exit, let process manager restart
 // ========================================
 process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION (server kept alive):', err.message);
+  console.error('UNCAUGHT EXCEPTION — shutting down:', err.message);
   console.error(err.stack);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {

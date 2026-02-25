@@ -9,7 +9,7 @@ const router = express.Router();
 // PUBLIC ROUTES
 // ========================================
 
-// GET /api/groomers — List all groomer shops
+// GET /api/groomers â€” List all groomer shops
 router.get('/', async (req, res) => {
   try {
     const {
@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const filter = { isActive: true };
 
-    if (petType) {
+    if (typeof petType === 'string') {
       filter.acceptedPetTypes = petType;
     }
 
@@ -36,11 +36,11 @@ router.get('/', async (req, res) => {
       filter.mobileGrooming = true;
     }
 
-    if (service) {
+    if (typeof service === 'string') {
       filter['services.category'] = service;
     }
 
-    if (search) {
+    if (typeof search === 'string' && search.trim()) {
       filter.$text = { $search: search };
     }
 
@@ -90,11 +90,11 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Get groomer shops error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/groomers/my/shop — Get current user's groomer shop
+// GET /api/groomers/my/shop â€” Get current user's groomer shop
 router.get('/my/shop', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findOne({ owner: req.user.id }).populate(
@@ -112,11 +112,11 @@ router.get('/my/shop', protect, async (req, res) => {
     res.json({ success: true, shop });
   } catch (error) {
     console.error('Get my shop error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// GET /api/groomers/:id — Get single shop detail
+// GET /api/groomers/:id â€” Get single shop detail
 router.get('/:id', async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.id)
@@ -132,7 +132,7 @@ router.get('/:id', async (req, res) => {
     res.json({ success: true, shop });
   } catch (error) {
     console.error('Get shop error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -140,7 +140,7 @@ router.get('/:id', async (req, res) => {
 // PROTECTED ROUTES
 // ========================================
 
-// POST /api/groomers — Create a groomer shop (user becomes groomer)
+// POST /api/groomers â€” Create a groomer shop (user becomes groomer)
 router.post('/', protect, async (req, res) => {
   try {
     const {
@@ -215,11 +215,11 @@ router.post('/', protect, async (req, res) => {
     res.status(201).json({ success: true, shop });
   } catch (error) {
     console.error('Create groomer shop error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// PUT /api/groomers/:id — Update shop
+// PUT /api/groomers/:id â€” Update shop
 router.put('/:id', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.id);
@@ -278,11 +278,11 @@ router.put('/:id', protect, async (req, res) => {
     res.json({ success: true, shop: updated });
   } catch (error) {
     console.error('Update shop error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// POST /api/groomers/:id/photos — Add photos
+// POST /api/groomers/:id/photos â€” Add photos
 router.post('/:id/photos', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.id);
@@ -312,11 +312,11 @@ router.post('/:id/photos', protect, async (req, res) => {
     res.json({ success: true, photos: shop.photos });
   } catch (error) {
     console.error('Add photos error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/groomers/:id/photos/:photoId — Remove a photo
+// DELETE /api/groomers/:id/photos/:photoId â€” Remove a photo
 router.delete('/:id/photos/:photoId', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.id);
@@ -341,11 +341,11 @@ router.delete('/:id/photos/:photoId', protect, async (req, res) => {
     res.json({ success: true, photos: shop.photos });
   } catch (error) {
     console.error('Delete photo error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// DELETE /api/groomers/:id — Delete shop
+// DELETE /api/groomers/:id â€” Delete shop
 router.delete('/:id', protect, async (req, res) => {
   try {
     const shop = await GroomerShop.findById(req.params.id);
@@ -370,7 +370,7 @@ router.delete('/:id', protect, async (req, res) => {
     res.json({ success: true, message: 'Groomer shop deleted' });
   } catch (error) {
     console.error('Delete shop error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

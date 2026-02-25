@@ -1,23 +1,48 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { sendVerificationEmail } = require('../services/emailService');
 
 const router = express.Router();
 
-// Generate JWT Token
+// Rate limiters for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many attempts, please try again later',
+  },
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // 5 registrations per IP per hour
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many registration attempts, please try again later',
+  },
+});
+
+// Generate JWT Token — pinned to HS256
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRE,
+    algorithm: 'HS256',
   });
 };
 
 // @route   POST /api/auth/register
 // @desc    Register a new user and send verification email
 // @access  Public
-router.post('/register', async (req, res) => {
+router.post('/register', registerLimiter, async (req, res) => {
   try {
     const {
       name,
@@ -47,21 +72,28 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'Password must be at least 6 characters',
+        message: 'Password must be at least 8 characters',
       });
     }
 
-    // Validate role if provided
-    const validRoles = ['user', 'vet', 'groomer', 'pet_sitter'];
-    if (role && !validRoles.includes(role)) {
+    // Password complexity check: must include uppercase, lowercase, digit
+    if (
+      !/[A-Z]/.test(password) ||
+      !/[a-z]/.test(password) ||
+      !/[0-9]/.test(password)
+    ) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid account type',
+        message: 'Password must include uppercase, lowercase, and a number',
       });
     }
+
+    // Force role to 'user' during self-registration
+    // Privileged roles (vet, groomer, etc.) require an admin-approved upgrade process
+    // Ignoring any role value sent by the client prevents privilege escalation
 
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -78,7 +110,7 @@ router.post('/register', async (req, res) => {
       email: email.toLowerCase(),
       password,
       emailVerified: false,
-      role: role || 'user',
+      role: 'user',
       phone: phone || '',
       gender: gender || '',
       dateOfBirth: dateOfBirth || null,
@@ -115,7 +147,7 @@ router.post('/register', async (req, res) => {
     console.error('Register error:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Server error during registration',
+      message: 'Server error during registration',
     });
   }
 });
@@ -123,7 +155,7 @@ router.post('/register', async (req, res) => {
 // @route   POST /api/auth/verify-email
 // @desc    Verify user email with token
 // @access  Public
-router.post('/verify-email', async (req, res) => {
+router.post('/verify-email', authLimiter, async (req, res) => {
   try {
     const { token } = req.body;
 
@@ -134,8 +166,11 @@ router.post('/verify-email', async (req, res) => {
       });
     }
 
-    // Hash the token to match the stored one
-    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    // Hash the token with HMAC to match the stored one
+    const hashedToken = crypto
+      .createHmac('sha256', process.env.JWT_SECRET)
+      .update(token)
+      .digest('hex');
 
     // Find user by verification token
     const user = await User.findOne({
@@ -175,7 +210,7 @@ router.post('/verify-email', async (req, res) => {
     console.error('Email verification error:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Server error during email verification',
+      message: 'Server error during email verification',
     });
   }
 });
@@ -183,7 +218,7 @@ router.post('/verify-email', async (req, res) => {
 // @route   POST /api/auth/resend-verification
 // @desc    Resend verification email
 // @access  Public
-router.post('/resend-verification', async (req, res) => {
+router.post('/resend-verification', authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -196,17 +231,12 @@ router.post('/resend-verification', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase() });
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    if (user.emailVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is already verified',
+    // Return generic message regardless of user existence to prevent enumeration
+    if (!user || user.emailVerified) {
+      return res.status(200).json({
+        success: true,
+        message:
+          'If this email is registered and unverified, a verification email has been sent',
       });
     }
 
@@ -233,7 +263,7 @@ router.post('/resend-verification', async (req, res) => {
     console.error('Resend verification error:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Server error',
+      message: 'Server error',
     });
   }
 });
@@ -241,7 +271,7 @@ router.post('/resend-verification', async (req, res) => {
 // @route   POST /api/auth/login
 // @desc    Login user (only if email is verified)
 // @access  Public
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -300,7 +330,7 @@ router.post('/login', async (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Server error during login',
+      message: 'Server error during login',
     });
   }
 });
@@ -310,7 +340,11 @@ router.post('/login', async (req, res) => {
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id)
+      .select(
+        'name email role profileImage bio gender dateOfBirth location country city phone isPrivate showLocation showEmail followers following petDollars lastSeen interests emailVerified createdAt',
+      )
+      .lean();
     res.status(200).json({
       success: true,
       user,

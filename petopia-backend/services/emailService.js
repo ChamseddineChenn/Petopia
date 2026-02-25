@@ -73,7 +73,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
                 <div class="code">${verificationToken}</div>
               </div>
               
-              <p style="text-align: center;"><strong>This code expires in 24 hours.</strong></p>
+              <p style="text-align: center;"><strong>This code expires in 15 minutes.</strong></p>
               
               <p class="warning" style="text-align: center;">
                 ⚠️ If you didn't sign up for this account, you can safely ignore this email.

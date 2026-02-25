@@ -5,6 +5,33 @@ const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Whitelist of allowed fields for health record create/update
+const ALLOWED_HEALTH_RECORD_FIELDS = [
+  'recordType',
+  'title',
+  'description',
+  'date',
+  'veterinarian',
+  'vaccination',
+  'examination',
+  'laboratory',
+  'prescription',
+  'surgery',
+  'attachments',
+  'notes',
+  'followUpDate',
+  'followUpNotes',
+  'cost',
+];
+
+function pickFields(body, allowed) {
+  const result = {};
+  for (const key of allowed) {
+    if (body[key] !== undefined) result[key] = body[key];
+  }
+  return result;
+}
+
 // All routes require authentication
 router.use(protect);
 
@@ -25,7 +52,7 @@ router.get('/:petId', async (req, res) => {
     const { recordType, limit = 50, page = 1 } = req.query;
 
     const query = { pet: req.params.petId, owner: req.user.id };
-    if (recordType) {
+    if (typeof recordType === 'string') {
       query.recordType = recordType;
     }
 
@@ -88,7 +115,7 @@ router.post('/:petId', async (req, res) => {
     }
 
     const record = await HealthRecord.create({
-      ...req.body,
+      ...pickFields(req.body, ALLOWED_HEALTH_RECORD_FIELDS),
       pet: req.params.petId,
       owner: req.user.id,
     });
@@ -96,9 +123,7 @@ router.post('/:petId', async (req, res) => {
     res.status(201).json({ success: true, record });
   } catch (error) {
     console.error('Create health record error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -120,16 +145,14 @@ router.put('/:petId/:recordId', async (req, res) => {
 
     record = await HealthRecord.findByIdAndUpdate(
       req.params.recordId,
-      req.body,
+      pickFields(req.body, ALLOWED_HEALTH_RECORD_FIELDS),
       { new: true, runValidators: true },
     );
 
     res.json({ success: true, record });
   } catch (error) {
     console.error('Update health record error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: error.message || 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

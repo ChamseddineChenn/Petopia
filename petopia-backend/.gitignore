@@ -9,6 +9,10 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# Firebase / sensitive config
+config/*.json
+!config/example.json
+
 # IDE
 .vscode/
 .idea/
