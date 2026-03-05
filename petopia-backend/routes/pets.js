@@ -62,6 +62,41 @@ router.post('/', async (req, res) => {
         .json({ success: false, message: 'Name and species are required' });
     }
 
+    // Input validation
+    if (name.length > 100) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Pet name cannot exceed 100 characters',
+        });
+    }
+    if (bio && bio.length > 500) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Bio cannot exceed 500 characters' });
+    }
+    if (weight !== undefined && weight !== null) {
+      const parsedWeight = parseFloat(weight);
+      if (isNaN(parsedWeight) || parsedWeight < 0 || parsedWeight > 2000) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Weight must be between 0 and 2000',
+          });
+      }
+    }
+    if (
+      profileImage &&
+      typeof profileImage === 'string' &&
+      profileImage.length > 2000
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Profile image URL too long' });
+    }
+
     const pet = await Pet.create({
       owner: req.user.id,
       name,
@@ -79,9 +114,7 @@ router.post('/', async (req, res) => {
     res.status(201).json({ success: true, pet });
   } catch (error) {
     console.error('Create pet error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -126,9 +159,7 @@ router.put('/:id', async (req, res) => {
     res.json({ success: true, pet });
   } catch (error) {
     console.error('Update pet error:', error);
-    res
-      .status(500)
-      .json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

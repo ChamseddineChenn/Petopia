@@ -32,6 +32,42 @@ function createRateLimiter(maxPerMinute) {
 
 const eventLimiter = createRateLimiter(60); // 60 events per minute per socket
 
+// ── Slot Lock Tracking ──
+// Server-side state prevents DoS via flood-locking other clinics' slots
+const slotLocks = new Map(); // lockKey → { userId, timer }
+const userActiveLocks = new Map(); // userId → Set<lockKey>
+const MAX_LOCKS_PER_USER = 2;
+const LOCK_TTL_MS = 5 * 60 * 1000; // 5 minutes auto-expire
+
+function releaseLock(lockKey, ioRef) {
+  const lock = slotLocks.get(lockKey);
+  if (!lock) return;
+  clearTimeout(lock.timer);
+  slotLocks.delete(lockKey);
+  const userLocks = userActiveLocks.get(lock.userId);
+  if (userLocks) {
+    userLocks.delete(lockKey);
+    if (userLocks.size === 0) userActiveLocks.delete(lock.userId);
+  }
+  // Broadcast unlock to the room
+  if (ioRef) {
+    const parts = lockKey.split(':');
+    const timeSlot = parts.pop();
+    const date = parts.pop();
+    const clinicId = parts.join(':');
+    const room = `clinic:${clinicId}:${date}`;
+    ioRef.to(room).emit('slot_unlocked', { clinicId, date, timeSlot });
+  }
+}
+
+function releaseAllUserLocks(userId, ioRef) {
+  const locks = userActiveLocks.get(userId);
+  if (!locks) return;
+  for (const key of [...locks]) {
+    releaseLock(key, ioRef);
+  }
+}
+
 // Validate a string looks like a MongoDB ObjectId
 function isValidObjectId(str) {
   return typeof str === 'string' && mongoose.Types.ObjectId.isValid(str);
@@ -96,12 +132,35 @@ function initSocket(httpServer) {
       )
         return;
       const safeDate = date.slice(0, 10); // YYYY-MM-DD only
+      const safeSlot = timeSlot.slice(0, 20);
+      const lockKey = `${clinicId}:${safeDate}:${safeSlot}`;
+
+      // Reject if slot already locked by another user
+      const existing = slotLocks.get(lockKey);
+      if (existing && existing.userId !== userId) return;
+
+      // Reject if this user already holds MAX_LOCKS
+      const userLocks = userActiveLocks.get(userId);
+      if (
+        userLocks &&
+        userLocks.size >= MAX_LOCKS_PER_USER &&
+        !userLocks.has(lockKey)
+      )
+        return;
+
+      // Register the lock with auto-expire TTL
+      if (existing) clearTimeout(existing.timer);
+      const timer = setTimeout(() => releaseLock(lockKey, io), LOCK_TTL_MS);
+      slotLocks.set(lockKey, { userId, socketId: socket.id, timer });
+      if (!userActiveLocks.has(userId)) userActiveLocks.set(userId, new Set());
+      userActiveLocks.get(userId).add(lockKey);
+
       const room = `clinic:${clinicId}:${safeDate}`;
       socket.join(room);
       socket.to(room).emit('slot_locked', {
         clinicId,
         date: safeDate,
-        timeSlot,
+        timeSlot: safeSlot,
         lockedBy: userId,
       });
     });
@@ -110,12 +169,14 @@ function initSocket(httpServer) {
       if (!eventLimiter(socket.id)) return;
       if (!isValidObjectId(clinicId) || typeof date !== 'string') return;
       const safeDate = date.slice(0, 10);
-      const room = `clinic:${clinicId}:${safeDate}`;
-      socket.to(room).emit('slot_unlocked', {
-        clinicId,
-        date: safeDate,
-        timeSlot,
-      });
+      const safeSlot = (timeSlot || '').slice(0, 20);
+      const lockKey = `${clinicId}:${safeDate}:${safeSlot}`;
+
+      // Only the lock owner can unlock
+      const lock = slotLocks.get(lockKey);
+      if (!lock || lock.userId !== userId) return;
+
+      releaseLock(lockKey, io);
     });
 
     // NOTE: slot_booked removed — slot_taken is now only emitted server-side
@@ -225,6 +286,9 @@ function initSocket(httpServer) {
     socket.on('disconnect', () => {
       // Clean up rate limiter entry to prevent memory leak
       eventLimiter.remove(socket.id);
+
+      // Release any slot locks held by this socket's user
+      releaseAllUserLocks(userId, io);
 
       const sockets = userSockets.get(userId);
       if (sockets) {

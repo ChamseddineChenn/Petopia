@@ -35,6 +35,26 @@ const userSchema = new mongoose.Schema(
       enum: ['user', 'vet', 'groomer', 'pet_sitter', 'pet_shop'],
       default: 'user',
     },
+    // Whether a service-provider role (vet/groomer/pet_shop) has been
+    // verified by an admin. Regular users default to true.
+    roleVerified: {
+      type: Boolean,
+      default: true,
+    },
+    // Incremented on logout / password change to invalidate all issued JWTs
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
+    // Account lockout after repeated failed login attempts
+    loginAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lockUntil: {
+      type: Date,
+      default: null,
+    },
     verificationToken: {
       type: String,
       default: null,
@@ -108,6 +128,33 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    // ====== Compliance & Consent (PIPEDA / CASL) ======
+    termsAcceptedAt: {
+      type: Date,
+      default: null,
+    },
+    termsVersion: {
+      type: String,
+      default: null,
+    },
+    privacyPolicyAcceptedAt: {
+      type: Date,
+      default: null,
+    },
+    privacyPolicyVersion: {
+      type: String,
+      default: null,
+    },
+    // CASL — notification preferences (persisted, not local-only)
+    notificationPreferences: {
+      pushEnabled: { type: Boolean, default: true },
+      likesEnabled: { type: Boolean, default: true },
+      commentsEnabled: { type: Boolean, default: true },
+      followsEnabled: { type: Boolean, default: true },
+      messagesEnabled: { type: Boolean, default: true },
+      emailMarketing: { type: Boolean, default: false }, // express consent required
+      consentUpdatedAt: { type: Date, default: null },
+    },
     // Push notification tokens (one per device)
     fcmTokens: [
       {
@@ -127,6 +174,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
       select: false, // Don't include in normal queries
+    },
+    // Stripe Connect account ID — for service provider payouts
+    stripeConnectAccountId: {
+      type: String,
+      default: null,
+      select: false,
     },
     // Presence tracking
     lastSeen: {
@@ -163,6 +216,10 @@ userSchema.set('toJSON', {
     delete ret.fcmTokens;
     delete ret.blockedUsers;
     delete ret.stripeCustomerId;
+    delete ret.stripeConnectAccountId;
+    delete ret.tokenVersion;
+    delete ret.loginAttempts;
+    delete ret.lockUntil;
     delete ret.__v;
     return ret;
   },
@@ -176,6 +233,10 @@ userSchema.set('toObject', {
     delete ret.fcmTokens;
     delete ret.blockedUsers;
     delete ret.stripeCustomerId;
+    delete ret.stripeConnectAccountId;
+    delete ret.tokenVersion;
+    delete ret.loginAttempts;
+    delete ret.lockUntil;
     delete ret.__v;
     return ret;
   },

@@ -9,8 +9,9 @@ const router = express.Router();
 // GET /api/reviews/:clinicId â€” Get all reviews for a clinic
 router.get('/:clinicId', async (req, res) => {
   try {
-    const { page = 1, limit = 20, sort = 'newest' } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const { page = 1, limit: rawLimit = 20, sort = 'newest' } = req.query;
+    const limit = Math.min(Math.max(parseInt(rawLimit) || 20, 1), 50);
+    const skip = (Math.max(parseInt(page) || 1, 1) - 1) * limit;
 
     let sortOption;
     switch (sort) {
@@ -33,8 +34,7 @@ router.get('/:clinicId', async (req, res) => {
       .populate('pet', 'name species')
       .sort(sortOption)
       .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+      .limit(limit);
 
     // Rating distribution
     const distribution = await Review.aggregate([
@@ -148,15 +148,57 @@ router.post('/:clinicId', protect, async (req, res) => {
         .json({ success: false, message: 'Rating and comment are required' });
     }
 
+    // Validate rating range
+    const parsedRating = parseInt(rating);
+    if (
+      !Number.isInteger(parsedRating) ||
+      parsedRating < 1 ||
+      parsedRating > 5
+    ) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Rating must be an integer between 1 and 5',
+        });
+    }
+
+    // Validate text lengths
+    if (comment.length > 5000) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Review comment cannot exceed 5000 characters',
+        });
+    }
+    if (title && title.length > 200) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Review title cannot exceed 200 characters',
+        });
+    }
+
+    // Validate photos array
+    let validatedPhotos = [];
+    if (photos && Array.isArray(photos)) {
+      validatedPhotos = photos
+        .filter((p) => typeof p === 'string' && p.length <= 2000)
+        .slice(0, 10);
+    }
+
     const review = await Review.create({
       clinic: req.params.clinicId,
       user: req.user.id,
-      rating,
-      title: title || '',
+      rating: parsedRating,
+      title: title ? title.slice(0, 200) : '',
       comment,
-      photos: photos || [],
+      photos: validatedPhotos,
       pet: pet || null,
-      visitedFor: visitedFor || '',
+      visitedFor:
+        typeof visitedFor === 'string' ? visitedFor.slice(0, 200) : '',
     });
 
     const populated = await Review.findById(review._id)
@@ -194,10 +236,35 @@ router.put('/:reviewId', protect, async (req, res) => {
     }
 
     const { rating, title, comment, photos } = req.body;
-    if (rating) review.rating = rating;
-    if (title !== undefined) review.title = title;
-    if (comment) review.comment = comment;
-    if (photos) review.photos = photos;
+    if (rating !== undefined) {
+      const parsedR = parseInt(rating);
+      if (!Number.isInteger(parsedR) || parsedR < 1 || parsedR > 5) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Rating must be 1-5' });
+      }
+      review.rating = parsedR;
+    }
+    if (title !== undefined)
+      review.title = typeof title === 'string' ? title.slice(0, 200) : '';
+    if (comment) {
+      if (comment.length > 5000) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Review comment cannot exceed 5000 characters',
+          });
+      }
+      review.comment = comment;
+    }
+    if (photos) {
+      review.photos = Array.isArray(photos)
+        ? photos
+            .filter((p) => typeof p === 'string' && p.length <= 2000)
+            .slice(0, 10)
+        : [];
+    }
 
     await review.save();
 
@@ -295,6 +362,14 @@ router.post('/:reviewId/respond', protect, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: 'Response text is required' });
+    }
+    if (text.length > 2000) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Response cannot exceed 2000 characters',
+        });
     }
 
     review.response = { text, respondedAt: new Date() };

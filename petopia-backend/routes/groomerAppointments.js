@@ -132,6 +132,9 @@ router.get('/slots/:shopId', protect, async (req, res) => {
 // POST /api/groomer-appointments â€” Book a grooming appointment
 // ========================================
 router.post('/', protect, async (req, res) => {
+  let balanceDeducted = false;
+  let price = 0;
+
   try {
     const { shopId, petId, date, timeSlot, serviceName, reason } = req.body;
 
@@ -171,6 +174,20 @@ router.post('/', protect, async (req, res) => {
       (s) => s.name.toLowerCase() === serviceName.toLowerCase(),
     );
 
+    // If exact match not found, try matching individual service names (multi-service booking)
+    let matchedServices = [];
+    if (shopService) {
+      matchedServices = [shopService];
+    } else {
+      // Split comma-separated service names and look up each
+      const serviceNames = serviceName
+        .split(',')
+        .map((n) => n.trim().toLowerCase());
+      matchedServices = serviceNames
+        .map((name) => shop.services.find((s) => s.name.toLowerCase() === name))
+        .filter(Boolean);
+    }
+
     const appointmentDate = new Date(date + 'T00:00:00.000Z');
 
     const existing = await GroomerAppointment.findOne({
@@ -187,15 +204,27 @@ router.post('/', protect, async (req, res) => {
     }
 
     // ── Pet Dollar reservation (funds held until groomer accepts/declines) ──
-    const servicePrice = shopService?.price;
-    if (!servicePrice || servicePrice <= 0) {
+    if (matchedServices.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'This service does not have a valid price. Cannot book.',
+        message: 'Please select at least one valid service to book.',
       });
     }
 
-    const price = Math.round(servicePrice * 100) / 100;
+    const servicePrice = matchedServices.reduce(
+      (sum, s) => sum + (s.price || 0),
+      0,
+    );
+    if (!servicePrice || servicePrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'The selected service(s) do not have a valid price. Cannot book.',
+      });
+    }
+
+    price = Math.round(servicePrice * 100) / 100;
+    const primaryService = matchedServices[0];
 
     // Check buyer balance
     const buyer = await User.findById(req.user.id).select('petDollars');
@@ -216,9 +245,17 @@ router.post('/', protect, async (req, res) => {
     if (!updatedBuyer) {
       return res.status(400).json({
         success: false,
-        message: 'Insufficient balance or concurrent transaction. Please try again.',
+        message:
+          'Insufficient balance or concurrent transaction. Please try again.',
       });
     }
+
+    balanceDeducted = true;
+
+    const totalDuration = matchedServices.reduce(
+      (sum, s) => sum + (s.duration || 0),
+      0,
+    );
 
     const appointment = await GroomerAppointment.create({
       shop: shopId,
@@ -229,8 +266,8 @@ router.post('/', protect, async (req, res) => {
       timeSlot,
       service: {
         name: serviceName,
-        duration: shopService?.duration || shop.appointmentDuration,
-        price: shopService?.price || null,
+        duration: totalDuration || shop.appointmentDuration,
+        price: price,
       },
       reason: reason || '',
       status: 'pending',
@@ -295,12 +332,31 @@ router.post('/', protect, async (req, res) => {
     res.status(201).json({ success: true, appointment: populated });
   } catch (error) {
     console.error('Book groomer appointment error:', error);
+
+    // Rollback P$ if balance was deducted but booking failed
+    if (balanceDeducted) {
+      try {
+        await User.findByIdAndUpdate(req.user.id, {
+          $inc: { petDollars: price },
+        });
+        console.log('Rolled back P$ reservation after booking error');
+      } catch (rollbackErr) {
+        console.error(
+          'CRITICAL: Failed to rollback P$ reservation:',
+          rollbackErr,
+        );
+      }
+    }
+
     if (error.code === 11000) {
       return res
         .status(400)
         .json({ success: false, message: 'This time slot is already booked' });
     }
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({
+      success: false,
+      message: 'Server error. Your balance has been restored.',
+    });
   }
 });
 
@@ -431,7 +487,18 @@ router.put('/:id/status', protect, async (req, res) => {
       const price = Math.round(servicePrice * 100) / 100;
 
       if (status === 'confirmed') {
-        // ACCEPT: Transfer reserved funds to groomer (93%) — platform keeps 7%
+        // ACCEPT: Mark reservation as accepted (funds stay reserved until completed)
+        await WalletTransaction.findOneAndUpdate(
+          {
+            'reference.entityId': appointment._id,
+            'reference.entityType': 'groomer_appointment',
+            type: 'reservation',
+            status: 'pending',
+          },
+          { status: 'accepted' },
+        );
+      } else if (status === 'completed') {
+        // COMPLETE: Transfer reserved funds to groomer (93%) — platform keeps 7%
         const split = calculateCommission(price);
 
         // Credit the groomer
@@ -447,19 +514,21 @@ router.put('/:id/status', protect, async (req, res) => {
             'reference.entityId': appointment._id,
             'reference.entityType': 'groomer_appointment',
             type: 'reservation',
-            status: 'pending',
+            status: { $in: ['pending', 'accepted'] },
           },
           { status: 'completed' },
         );
 
         // Record buyer's finalized purchase transaction
-        const buyer = await User.findById(appointment.user).select('petDollars');
+        const buyer = await User.findById(appointment.user).select(
+          'petDollars',
+        );
         await WalletTransaction.create({
           user: appointment.user,
           type: 'purchase',
           amount: -price,
           balanceAfter: buyer?.petDollars ?? 0,
-          description: `Grooming appointment confirmed — ${appointment.service.name}`,
+          description: `Grooming appointment completed — ${appointment.service.name}`,
           reference: {
             entityType: 'groomer_appointment',
             entityId: appointment._id,
@@ -494,13 +563,48 @@ router.put('/:id/status', protect, async (req, res) => {
             status: 'completed',
           });
         }
+      } else if (status === 'no-show') {
+        // NO-SHOW: Refund reserved funds to pet owner
+        const reservationTx = await WalletTransaction.findOne({
+          'reference.entityId': appointment._id,
+          'reference.entityType': 'groomer_appointment',
+          type: 'reservation',
+          status: { $in: ['pending', 'accepted'] },
+        });
+
+        if (reservationTx) {
+          const refundAmount = Math.abs(reservationTx.amount);
+          const updatedBuyer = await User.findByIdAndUpdate(
+            appointment.user,
+            { $inc: { petDollars: refundAmount } },
+            { new: true, select: 'petDollars' },
+          );
+
+          reservationTx.status = 'reversed';
+          await reservationTx.save();
+
+          if (updatedBuyer) {
+            await WalletTransaction.create({
+              user: appointment.user,
+              type: 'refund',
+              amount: refundAmount,
+              balanceAfter: updatedBuyer.petDollars,
+              description: `Refund — grooming appointment no-show (${appointment.service.name})`,
+              reference: {
+                entityType: 'groomer_appointment',
+                entityId: appointment._id,
+              },
+              status: 'completed',
+            });
+          }
+        }
       } else if (status === 'cancelled' && appointment.cancelledBy) {
         // CANCEL/DECLINE: Refund reserved funds to pet owner
         const reservationTx = await WalletTransaction.findOne({
           'reference.entityId': appointment._id,
           'reference.entityType': 'groomer_appointment',
           type: 'reservation',
-          status: 'pending',
+          status: { $in: ['pending', 'accepted'] },
         });
 
         if (reservationTx) {

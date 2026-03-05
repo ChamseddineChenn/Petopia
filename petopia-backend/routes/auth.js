@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { sendVerificationEmail } = require('../services/emailService');
+const { audit } = require('../services/auditService');
 
 const router = express.Router();
 
@@ -31,12 +32,24 @@ const registerLimiter = rateLimit({
   },
 });
 
-// Generate JWT Token — pinned to HS256
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
+// Generate JWT Access Token — pinned to HS256, includes token version for revocation
+const generateToken = (id, tokenVersion) => {
+  return jwt.sign({ id, v: tokenVersion || 0 }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRE,
     algorithm: 'HS256',
   });
+};
+
+// Generate JWT Refresh Token — longer-lived, typed so it can't be used as access token
+const generateRefreshToken = (id, tokenVersion) => {
+  return jwt.sign(
+    { id, v: tokenVersion || 0, type: 'refresh' },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: '30d',
+      algorithm: 'HS256',
+    },
+  );
 };
 
 // @route   POST /api/auth/register
@@ -55,6 +68,7 @@ router.post('/register', registerLimiter, async (req, res) => {
       dateOfBirth,
       country,
       city,
+      termsAccepted,
     } = req.body;
 
     // Validation
@@ -62,6 +76,15 @@ router.post('/register', registerLimiter, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields',
+      });
+    }
+
+    // PIPEDA / Canadian compliance: must accept Terms + Privacy Policy
+    if (!termsAccepted) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You must accept the Terms of Service and Privacy Policy to create an account',
       });
     }
 
@@ -91,9 +114,11 @@ router.post('/register', registerLimiter, async (req, res) => {
       });
     }
 
-    // Force role to 'user' during self-registration
-    // Privileged roles (vet, groomer, etc.) require an admin-approved upgrade process
-    // Ignoring any role value sent by the client prevents privilege escalation
+    // Validate and accept role from client (self-registration)
+    const allowedRoles = ['user', 'vet', 'groomer', 'pet_shop'];
+    const assignedRole = allowedRoles.includes(role) ? role : 'user';
+    // Service-provider roles require admin verification before full access
+    const roleVerified = assignedRole === 'user';
 
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -105,17 +130,24 @@ router.post('/register', registerLimiter, async (req, res) => {
     }
 
     // Create user with verification token
+    const now = new Date();
     const user = new User({
       name,
       email: email.toLowerCase(),
       password,
       emailVerified: false,
-      role: 'user',
+      role: assignedRole,
+      roleVerified,
       phone: phone || '',
       gender: gender || '',
       dateOfBirth: dateOfBirth || null,
       country: country || '',
       city: city || '',
+      // PIPEDA compliance: record consent timestamps
+      termsAcceptedAt: now,
+      termsVersion: '1.0',
+      privacyPolicyAcceptedAt: now,
+      privacyPolicyVersion: '1.0',
     });
 
     // Generate verification token
@@ -143,6 +175,21 @@ router.post('/register', registerLimiter, async (req, res) => {
         'Registration successful! Please check your email to verify your account.',
       user: userResponse,
     });
+
+    // Audit log (non-blocking)
+    audit(req, 'register', user._id, 'New user registered');
+    audit(
+      req,
+      'terms_accepted',
+      user._id,
+      `Terms v1.0 accepted at registration`,
+    );
+    audit(
+      req,
+      'privacy_policy_accepted',
+      user._id,
+      `Privacy Policy v1.0 accepted at registration`,
+    );
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({
@@ -192,7 +239,8 @@ router.post('/verify-email', authLimiter, async (req, res) => {
     await user.save();
 
     // Generate JWT token for auto-login after verification
-    const jwtToken = generateToken(user._id);
+    const jwtToken = generateToken(user._id, user.tokenVersion);
+    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
 
     // Remove sensitive fields from response
     const userResponse = user.toObject();
@@ -204,8 +252,12 @@ router.post('/verify-email', authLimiter, async (req, res) => {
       success: true,
       message: 'Email verified successfully!',
       token: jwtToken,
+      refreshToken,
       user: userResponse,
     });
+
+    // Audit log (non-blocking)
+    audit(req, 'email_verified', user._id, 'Email verified successfully');
   } catch (error) {
     console.error('Email verification error:', error);
     res.status(500).json({
@@ -283,14 +335,32 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
-    // Check for user (include password field)
+    // Check for user (include password + lockout fields)
     const user = await User.findOne({ email: email.toLowerCase() }).select(
-      '+password',
+      '+password +loginAttempts +lockUntil +tokenVersion',
     );
     if (!user) {
+      audit(req, 'login_failed', null, 'User not found', {
+        email: email.toLowerCase(),
+      });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
+      });
+    }
+
+    // Account lockout check — 5 failed attempts → 30-minute lock
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      const minutesLeft = Math.ceil((user.lockUntil - Date.now()) / 60000);
+      audit(
+        req,
+        'login_locked',
+        user._id,
+        `Account locked (${minutesLeft}m remaining)`,
+      );
+      return res.status(423).json({
+        success: false,
+        message: `Account temporarily locked. Try again in ${minutesLeft} minute${minutesLeft > 1 ? 's' : ''}.`,
       });
     }
 
@@ -306,10 +376,33 @@ router.post('/login', authLimiter, async (req, res) => {
     // Check password
     const isPasswordMatch = await user.matchPassword(password);
     if (!isPasswordMatch) {
+      // Increment failed attempts
+      const attempts = (user.loginAttempts || 0) + 1;
+      const update = { loginAttempts: attempts };
+      if (attempts >= 5) {
+        update.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+        audit(
+          req,
+          'account_locked',
+          user._id,
+          `Account locked after ${attempts} failed attempts`,
+        );
+      }
+      await User.updateOne({ _id: user._id }, update);
+
+      audit(req, 'login_failed', user._id, 'Incorrect password');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
       });
+    }
+
+    // Successful login — reset lockout counters
+    if (user.loginAttempts > 0 || user.lockUntil) {
+      await User.updateOne(
+        { _id: user._id },
+        { loginAttempts: 0, lockUntil: null },
+      );
     }
 
     // Remove password from response
@@ -318,14 +411,19 @@ router.post('/login', authLimiter, async (req, res) => {
     delete userResponse.verificationToken;
     delete userResponse.verificationTokenExpiry;
 
-    // Generate token
-    const token = generateToken(user._id);
+    // Generate access + refresh tokens (include tokenVersion for revocation)
+    const token = generateToken(user._id, user.tokenVersion);
+    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
 
     res.status(200).json({
       success: true,
       token,
+      refreshToken,
       user: userResponse,
     });
+
+    // Audit log (non-blocking)
+    audit(req, 'login_success', user._id, 'User logged in');
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
@@ -342,7 +440,7 @@ router.get('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
       .select(
-        'name email role profileImage bio gender dateOfBirth location country city phone isPrivate showLocation showEmail followers following petDollars lastSeen interests emailVerified createdAt',
+        'name email role profileImage bio gender dateOfBirth location country city phone isPrivate showLocation showEmail followers following petDollars lastSeen interests emailVerified notificationPreferences termsAcceptedAt termsVersion privacyPolicyAcceptedAt privacyPolicyVersion createdAt',
       )
       .lean();
     res.status(200).json({
@@ -354,6 +452,88 @@ router.get('/me', protect, async (req, res) => {
       success: false,
       message: 'Server error',
     });
+  }
+});
+
+// ========================================================================
+//  POST  /api/auth/refresh   — Exchange a valid refresh token for new tokens
+// ========================================================================
+router.post('/refresh', authLimiter, async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Refresh token is required' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, process.env.JWT_SECRET, {
+        algorithms: ['HS256'],
+      });
+    } catch (err) {
+      return res
+        .status(401)
+        .json({ success: false, message: 'Invalid or expired refresh token' });
+    }
+
+    // Must be a refresh-type token
+    if (decoded.type !== 'refresh') {
+      return res
+        .status(401)
+        .json({ success: false, message: 'Invalid token type' });
+    }
+
+    // Verify user exists and token version matches
+    const user = await User.findById(decoded.id)
+      .select('_id tokenVersion emailVerified')
+      .lean();
+    if (!user) {
+      return res
+        .status(401)
+        .json({ success: false, message: 'User no longer exists' });
+    }
+    if (typeof decoded.v === 'number' && decoded.v !== user.tokenVersion) {
+      return res
+        .status(401)
+        .json({ success: false, message: 'Token has been revoked' });
+    }
+    if (!user.emailVerified) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Email verification required' });
+    }
+
+    // Issue new token pair
+    const newToken = generateToken(user._id, user.tokenVersion);
+    const newRefreshToken = generateRefreshToken(user._id, user.tokenVersion);
+
+    res.json({
+      success: true,
+      token: newToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ========================================================================
+//  POST  /api/auth/logout   — Revoke ALL tokens for the current user
+// ========================================================================
+router.post('/logout', protect, async (req, res) => {
+  try {
+    // Bump tokenVersion — instantly invalidates every access + refresh token
+    await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
+
+    audit(req, 'logout', req.user.id, 'User logged out (all tokens revoked)');
+
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

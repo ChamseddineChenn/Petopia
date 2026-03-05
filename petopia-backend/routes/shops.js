@@ -354,12 +354,22 @@ router.get('/products/:productId', protect, async (req, res) => {
 // GET /api/shops/products/browse/all — Browse all products across shops
 router.get('/products/browse/all', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 20, category, search, sort, petType } = req.query;
+    const { page = 1, limit = 20, category, search, sort, petType, onSale, minPrice, maxPrice } = req.query;
     const filter = { isActive: true };
     if (typeof category === 'string') filter.category = category;
     if (typeof petType === 'string') filter.petType = { $in: [petType, 'all'] };
     if (typeof search === 'string' && search.trim()) {
       filter.$text = { $search: search };
+    }
+    if (onSale === 'true') {
+      filter.compareAtPrice = { $gt: 0 };
+      filter.$expr = { $gt: ['$compareAtPrice', '$price'] };
+    }
+    // Price range filter
+    if (minPrice || maxPrice) {
+      filter.price = {};
+      if (minPrice) filter.price.$gte = Number(minPrice);
+      if (maxPrice) filter.price.$lte = Number(maxPrice);
     }
 
     let sortObj = { createdAt: -1 };

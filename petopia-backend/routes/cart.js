@@ -382,7 +382,8 @@ router.post('/checkout', protect, async (req, res) => {
 
       // Track per-owner revenue
       const ownerId = product.owner.toString();
-      const itemTotal = Math.round(item.product.price * item.quantity * 100) / 100;
+      const itemTotal =
+        Math.round(item.product.price * item.quantity * 100) / 100;
       ownerTotals[ownerId] = (ownerTotals[ownerId] || 0) + itemTotal;
 
       // Track for per-shop purchase notification

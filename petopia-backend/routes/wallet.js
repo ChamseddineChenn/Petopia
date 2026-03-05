@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const WalletTransaction = require('../models/WalletTransaction');
@@ -7,6 +8,8 @@ const Notification = require('../models/Notification');
 const { protect } = require('../middleware/auth');
 const { deliverNotification } = require('../services/hybridDelivery');
 const { calculateCommission } = require('../services/stripeService');
+
+const SERVICE_ROLES = ['vet', 'groomer', 'pet_shop'];
 
 // Rate limiters for financial endpoints
 const topUpLimiter = rateLimit({
@@ -136,6 +139,12 @@ router.post('/spend', spendLimiter, protect, async (req, res) => {
         message: 'Please provide a valid amount',
       });
     }
+    if (parsedAmount < 0.5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum transaction amount is P$0.50',
+      });
+    }
     if (parsedAmount > 100000) {
       return res.status(400).json({
         success: false,
@@ -145,6 +154,24 @@ router.post('/spend', spendLimiter, protect, async (req, res) => {
 
     const spendAmount = Math.round(parsedAmount * 100) / 100;
 
+    // Validate sellerId is a valid ObjectId and is a service provider
+    if (sellerId) {
+      if (!mongoose.Types.ObjectId.isValid(sellerId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid seller ID' });
+      }
+      const seller = await User.findById(sellerId).select('role').lean();
+      if (!seller || !SERVICE_ROLES.includes(seller.role)) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Seller is not a valid service provider',
+          });
+      }
+    }
+
     // Sanitize reference — only allow known fields (prevent injection of arbitrary objects)
     const safeReference = {
       entityType:
@@ -152,6 +179,22 @@ router.post('/spend', spendLimiter, protect, async (req, res) => {
       entityId: reference?.entityId || null,
       shopId: reference?.shopId || null,
     };
+
+    // Idempotency check — prevent duplicate transactions for the same entity
+    if (safeReference.entityId) {
+      const existingTx = await WalletTransaction.findOne({
+        user: req.user.id,
+        'reference.entityId': safeReference.entityId,
+        type: 'purchase',
+        status: 'completed',
+      }).lean();
+      if (existingTx) {
+        return res.status(409).json({
+          success: false,
+          message: 'This transaction has already been processed',
+        });
+      }
+    }
 
     // Check balance first
     const user = await User.findById(req.user.id).select('petDollars');

@@ -12,18 +12,19 @@ router.use(protect);
 // ========================================
 router.get('/', async (req, res) => {
   try {
-    const { page = 1, limit = 30, unreadOnly } = req.query;
+    const { page = 1, limit: rawLimit = 30, unreadOnly } = req.query;
+    const limit = Math.min(Math.max(parseInt(rawLimit) || 30, 1), 100);
     const filter = { recipient: req.user.id };
 
     if (unreadOnly === 'true') {
       filter.read = false;
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (Math.max(parseInt(page) || 1, 1) - 1) * limit;
     const notifications = await Notification.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit))
+      .limit(limit)
       .populate('sender', 'name profileImage')
       .lean();
 

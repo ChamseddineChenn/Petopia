@@ -1,6 +1,7 @@
 const express = require('express');
 const HealthRecord = require('../models/HealthRecord');
 const Pet = require('../models/Pet');
+const Appointment = require('../models/Appointment');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -32,6 +33,29 @@ function pickFields(body, allowed) {
   return result;
 }
 
+/**
+ * Check if user is the pet owner OR a vet who has an appointment with the pet.
+ * Returns { authorized: true, isOwner: bool, isVet: bool } or { authorized: false }.
+ */
+async function authorizeForPet(userId, pet) {
+  if (pet.owner.toString() === userId) {
+    return { authorized: true, isOwner: true, isVet: false };
+  }
+
+  // Check if user is a vet with a confirmed/completed appointment for this pet
+  const appointment = await Appointment.findOne({
+    vet: userId,
+    pet: pet._id,
+    status: { $in: ['confirmed', 'completed'] },
+  });
+
+  if (appointment) {
+    return { authorized: true, isOwner: false, isVet: true };
+  }
+
+  return { authorized: false, isOwner: false, isVet: false };
+}
+
 // All routes require authentication
 router.use(protect);
 
@@ -43,7 +67,9 @@ router.get('/:petId', async (req, res) => {
     if (!pet) {
       return res.status(404).json({ success: false, message: 'Pet not found' });
     }
-    if (pet.owner.toString() !== req.user.id) {
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
       return res
         .status(403)
         .json({ success: false, message: 'Not authorized' });
@@ -51,7 +77,8 @@ router.get('/:petId', async (req, res) => {
 
     const { recordType, limit = 50, page = 1 } = req.query;
 
-    const query = { pet: req.params.petId, owner: req.user.id };
+    // Both owner and vet see all records for this pet
+    const query = { pet: req.params.petId };
     if (typeof recordType === 'string') {
       query.recordType = recordType;
     }
@@ -81,16 +108,23 @@ router.get('/:petId', async (req, res) => {
 // @desc    Get a single health record
 router.get('/:petId/:recordId', async (req, res) => {
   try {
+    const pet = await Pet.findById(req.params.petId);
+    if (!pet) {
+      return res.status(404).json({ success: false, message: 'Pet not found' });
+    }
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
     const record = await HealthRecord.findById(req.params.recordId);
     if (!record) {
       return res
         .status(404)
         .json({ success: false, message: 'Record not found' });
-    }
-    if (record.owner.toString() !== req.user.id) {
-      return res
-        .status(403)
-        .json({ success: false, message: 'Not authorized' });
     }
 
     res.json({ success: true, record });
@@ -108,16 +142,20 @@ router.post('/:petId', async (req, res) => {
     if (!pet) {
       return res.status(404).json({ success: false, message: 'Pet not found' });
     }
-    if (pet.owner.toString() !== req.user.id) {
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
       return res
         .status(403)
         .json({ success: false, message: 'Not authorized' });
     }
 
+    // owner is always the pet's actual owner, so the record stays with the pet
     const record = await HealthRecord.create({
       ...pickFields(req.body, ALLOWED_HEALTH_RECORD_FIELDS),
       pet: req.params.petId,
-      owner: req.user.id,
+      owner: pet.owner,
+      createdBy: req.user.id,
     });
 
     res.status(201).json({ success: true, record });
@@ -131,16 +169,23 @@ router.post('/:petId', async (req, res) => {
 // @desc    Update a health record
 router.put('/:petId/:recordId', async (req, res) => {
   try {
+    const pet = await Pet.findById(req.params.petId);
+    if (!pet) {
+      return res.status(404).json({ success: false, message: 'Pet not found' });
+    }
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
     let record = await HealthRecord.findById(req.params.recordId);
     if (!record) {
       return res
         .status(404)
         .json({ success: false, message: 'Record not found' });
-    }
-    if (record.owner.toString() !== req.user.id) {
-      return res
-        .status(403)
-        .json({ success: false, message: 'Not authorized' });
     }
 
     record = await HealthRecord.findByIdAndUpdate(
@@ -160,16 +205,23 @@ router.put('/:petId/:recordId', async (req, res) => {
 // @desc    Delete a health record
 router.delete('/:petId/:recordId', async (req, res) => {
   try {
+    const pet = await Pet.findById(req.params.petId);
+    if (!pet) {
+      return res.status(404).json({ success: false, message: 'Pet not found' });
+    }
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
     const record = await HealthRecord.findById(req.params.recordId);
     if (!record) {
       return res
         .status(404)
         .json({ success: false, message: 'Record not found' });
-    }
-    if (record.owner.toString() !== req.user.id) {
-      return res
-        .status(403)
-        .json({ success: false, message: 'Not authorized' });
     }
 
     await HealthRecord.findByIdAndDelete(req.params.recordId);
@@ -188,7 +240,9 @@ router.get('/:petId/upcoming/reminders', async (req, res) => {
     if (!pet) {
       return res.status(404).json({ success: false, message: 'Pet not found' });
     }
-    if (pet.owner.toString() !== req.user.id) {
+
+    const auth = await authorizeForPet(req.user.id, pet);
+    if (!auth.authorized) {
       return res
         .status(403)
         .json({ success: false, message: 'Not authorized' });

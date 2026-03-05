@@ -21,6 +21,11 @@ const healthRecordSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // Who actually created the record (may differ from owner for vet-created records)
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
 
     // Record Type Classification
     recordType: {

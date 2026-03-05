@@ -6,9 +6,21 @@ const FollowRequest = require('../models/FollowRequest');
 const Notification = require('../models/Notification');
 const VetClinic = require('../models/VetClinic');
 const GroomerShop = require('../models/GroomerShop');
+const Appointment = require('../models/Appointment');
+const GroomerAppointment = require('../models/GroomerAppointment');
+const Comment = require('../models/Comment');
+const Conversation = require('../models/Conversation');
+const Message = require('../models/Message');
+const Cart = require('../models/Cart');
+const Review = require('../models/Review');
+const GroomerReview = require('../models/GroomerReview');
+const HealthRecord = require('../models/HealthRecord');
+const WalletTransaction = require('../models/WalletTransaction');
 const { protect } = require('../middleware/auth');
 const { sendToUser } = require('../socket');
 const { getPresence } = require('../services/hybridDelivery');
+const { audit } = require('../services/auditService');
+const { getStripe } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -160,7 +172,7 @@ router.get('/profile', async (req, res) => {
 
 // @route   PUT /api/user/profile
 // @desc    Update user profile
-router.put('/profile', async (req, res) => {
+router.put('/profile', protect, async (req, res) => {
   try {
     const allowedFields = ['name', 'bio', 'location', 'phone', 'profileImage'];
     const updates = {};
@@ -169,6 +181,60 @@ router.put('/profile', async (req, res) => {
         updates[field] = req.body[field];
       }
     });
+
+    // Input validation
+    if (updates.name !== undefined) {
+      if (
+        typeof updates.name !== 'string' ||
+        updates.name.length > 100 ||
+        updates.name.trim().length === 0
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Name must be 1-100 characters' });
+      }
+      updates.name = updates.name.trim();
+    }
+    if (updates.bio !== undefined) {
+      if (typeof updates.bio !== 'string' || updates.bio.length > 500) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Bio cannot exceed 500 characters',
+          });
+      }
+    }
+    if (updates.phone !== undefined && updates.phone !== '') {
+      if (typeof updates.phone !== 'string' || updates.phone.length > 20) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid phone number' });
+      }
+    }
+    if (updates.profileImage !== undefined && updates.profileImage !== '') {
+      if (
+        typeof updates.profileImage !== 'string' ||
+        updates.profileImage.length > 2000
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Profile image URL too long' });
+      }
+    }
+    if (updates.location !== undefined) {
+      if (
+        typeof updates.location !== 'string' ||
+        updates.location.length > 200
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Location cannot exceed 200 characters',
+          });
+      }
+    }
 
     const user = await User.findByIdAndUpdate(req.user.id, updates, {
       new: true,
@@ -190,7 +256,7 @@ router.put('/profile', async (req, res) => {
 
 // @route   PUT /api/user/change-password
 // @desc    Change password
-router.put('/change-password', async (req, res) => {
+router.put('/change-password', protect, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
@@ -229,9 +295,20 @@ router.put('/change-password', async (req, res) => {
     }
 
     user.password = newPassword;
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // Revoke all existing tokens
     await user.save();
 
-    res.json({ success: true, message: 'Password updated successfully' });
+    audit(
+      req,
+      'password_changed',
+      req.user.id,
+      'Password changed — all tokens revoked',
+    );
+
+    res.json({
+      success: true,
+      message: 'Password updated successfully. Please log in again.',
+    });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -239,8 +316,11 @@ router.put('/change-password', async (req, res) => {
 });
 
 // @route   DELETE /api/user/account
-// @desc    Delete user account and all associated data
-router.delete('/account', async (req, res) => {
+// @desc    Delete user account with smart data preservation
+//          - Personal data is fully deleted (PIPEDA compliance)
+//          - Records that belong to OTHER users' history are anonymized, not deleted
+//          - Financial records are kept for Canadian tax compliance (7 years)
+router.delete('/account', protect, async (req, res) => {
   try {
     const { password } = req.body;
 
@@ -265,10 +345,288 @@ router.delete('/account', async (req, res) => {
         .json({ success: false, message: 'Password is incorrect' });
     }
 
-    // Delete all user's pets and posts
-    await Pet.deleteMany({ owner: req.user.id });
-    await Post.deleteMany({ author: req.user.id });
-    await User.findByIdAndDelete(req.user.id);
+    const userId = req.user.id;
+    const userRole = user.role;
+
+    // Audit log before deletion (persists — user ref becomes orphaned)
+    await audit(
+      req,
+      'account_deleted',
+      userId,
+      `User (${userRole}) deleted their account`,
+    );
+
+    // ==========================================================
+    // 0. STRIPE CLEANUP — delete connected accounts & customer
+    // ==========================================================
+    try {
+      const stripe = getStripe();
+      // Fetch Stripe IDs (not exposed via toJSON)
+      const stripeUser = await User.findById(userId)
+        .select('+stripeCustomerId +stripeConnectAccountId')
+        .lean();
+
+      // Delete Stripe Connect account (service providers)
+      if (stripeUser?.stripeConnectAccountId) {
+        try {
+          await stripe.accounts.del(stripeUser.stripeConnectAccountId);
+        } catch (e) {
+          console.log('Stripe Connect account deletion skipped:', e.message);
+        }
+      }
+
+      // Delete Stripe Customer (all roles — used for top-ups)
+      if (stripeUser?.stripeCustomerId) {
+        try {
+          await stripe.customers.del(stripeUser.stripeCustomerId);
+        } catch (e) {
+          console.log('Stripe Customer deletion skipped:', e.message);
+        }
+      }
+    } catch (e) {
+      // Non-fatal — continue with account deletion even if Stripe fails
+      console.log('Stripe cleanup error (non-fatal):', e.message);
+    }
+
+    // ==========================================================
+    // 1. ROLE-SPECIFIC: VET — preserve records for pet owners
+    // ==========================================================
+    if (userRole === 'vet') {
+      // Find clinics BEFORE anonymizing (needed for review cleanup)
+      const vetClinics = await VetClinic.find({ owner: userId }).select('_id');
+      const clinicIds = vetClinics.map((c) => c._id);
+
+      // Appointments where this vet was the provider → ANONYMIZE
+      // Pet owner keeps the appointment in their history
+      await Appointment.updateMany({ vet: userId }, [
+        {
+          $set: {
+            vet: null,
+            notes: {
+              $concat: [
+                { $ifNull: ['$notes', ''] },
+                ' [Provider account deleted]',
+              ],
+            },
+          },
+        },
+      ]);
+
+      // Health records this vet created → ANONYMIZE createdBy
+      // Pet owner keeps the full medical record; veterinarian subdoc has embedded name/clinic
+      await HealthRecord.updateMany(
+        { createdBy: userId },
+        { $set: { createdBy: null } },
+      );
+
+      // Soft-delete vet clinics (appointments still reference them for history)
+      await VetClinic.updateMany(
+        { owner: userId },
+        {
+          $set: {
+            isActive: false,
+            owner: null,
+            phone: '',
+            email: '',
+            website: '',
+          },
+        },
+      );
+
+      // Reviews of their clinics: keep reviews (they belong to reviewers),
+      // but clear the vet's response text (that's the vet's personal data)
+      if (clinicIds.length > 0) {
+        await Review.updateMany(
+          { clinic: { $in: clinicIds }, 'response.text': { $exists: true } },
+          {
+            $set: {
+              'response.text': '[Provider account deleted]',
+              'response.respondedAt': null,
+            },
+          },
+        );
+      }
+
+      // Wallet transactions where this vet was the seller → ANONYMIZE sellerId
+      await WalletTransaction.updateMany(
+        { 'commission.sellerId': userId },
+        { $set: { 'commission.sellerId': null } },
+      );
+    }
+
+    // ==========================================================
+    // 2. ROLE-SPECIFIC: GROOMER — preserve records for pet owners
+    // ==========================================================
+    if (userRole === 'groomer') {
+      const groomerShops = await GroomerShop.find({ owner: userId }).select(
+        '_id',
+      );
+      const shopIds = groomerShops.map((s) => s._id);
+
+      // Groomer appointments where this groomer was provider → ANONYMIZE
+      await GroomerAppointment.updateMany({ groomer: userId }, [
+        {
+          $set: {
+            groomer: null,
+            notes: {
+              $concat: [
+                { $ifNull: ['$notes', ''] },
+                ' [Provider account deleted]',
+              ],
+            },
+          },
+        },
+      ]);
+
+      // Soft-delete groomer shops
+      await GroomerShop.updateMany(
+        { owner: userId },
+        {
+          $set: {
+            isActive: false,
+            owner: null,
+            phone: '',
+            email: '',
+            website: '',
+          },
+        },
+      );
+
+      // Reviews of their shops: keep reviews, clear groomer's response text
+      if (shopIds.length > 0) {
+        await GroomerReview.updateMany(
+          { shop: { $in: shopIds }, 'response.text': { $exists: true } },
+          {
+            $set: {
+              'response.text': '[Provider account deleted]',
+              'response.respondedAt': null,
+            },
+          },
+        );
+      }
+
+      // Wallet transactions where this groomer was the seller → ANONYMIZE
+      await WalletTransaction.updateMany(
+        { 'commission.sellerId': userId },
+        { $set: { 'commission.sellerId': null } },
+      );
+    }
+
+    // ==========================================================
+    // 3. ROLE-SPECIFIC: PET SHOP — similar soft-delete pattern
+    // ==========================================================
+    if (userRole === 'pet_shop') {
+      // Wallet transactions where this shop was the seller → ANONYMIZE
+      await WalletTransaction.updateMany(
+        { 'commission.sellerId': userId },
+        { $set: { 'commission.sellerId': null } },
+      );
+    }
+
+    // ==========================================================
+    // 4. ROLE-SPECIFIC: PET OWNER — preserve records for providers
+    // ==========================================================
+    if (userRole === 'user') {
+      // Vet appointments where this user was the patient → ANONYMIZE
+      // Vet keeps the appointment record for their business history
+      await Appointment.updateMany({ user: userId }, { $set: { user: null } });
+
+      // Groomer appointments where this user was the patient → ANONYMIZE
+      await GroomerAppointment.updateMany(
+        { user: userId },
+        { $set: { user: null } },
+      );
+
+      // Delete user's pets and their health records (this IS the user's personal data)
+      const userPets = await Pet.find({ owner: userId }).select('_id');
+      const petIds = userPets.map((p) => p._id);
+      if (petIds.length > 0) {
+        await HealthRecord.deleteMany({ pet: { $in: petIds } });
+
+        // Anonymize pet refs in kept appointments (so they don't point to deleted pets)
+        await Appointment.updateMany(
+          { pet: { $in: petIds } },
+          { $set: { pet: null } },
+        );
+        await GroomerAppointment.updateMany(
+          { pet: { $in: petIds } },
+          { $set: { pet: null } },
+        );
+      }
+      await Pet.deleteMany({ owner: userId });
+
+      // Reviews they wrote → ANONYMIZE user ref (keep content for clinic reputation)
+      await Review.updateMany({ user: userId }, { $set: { user: null } });
+      await GroomerReview.updateMany(
+        { user: userId },
+        { $set: { user: null } },
+      );
+
+      // Remove from helpful vote arrays
+      await Review.updateMany(
+        { helpfulVotes: userId },
+        { $pull: { helpfulVotes: userId }, $inc: { helpfulCount: -1 } },
+      );
+      await GroomerReview.updateMany(
+        { helpfulVotes: userId },
+        { $pull: { helpfulVotes: userId }, $inc: { helpfulCount: -1 } },
+      );
+    }
+
+    // ==========================================================
+    // 5. COMMON: Wallet transactions — ANONYMIZE for tax compliance
+    //    Canadian tax law requires 7 years of financial records
+    // ==========================================================
+    await WalletTransaction.updateMany(
+      { user: userId },
+      { $set: { user: null } },
+    );
+
+    // ==========================================================
+    // 6. COMMON: DELETE personal data that doesn't affect others
+    // ==========================================================
+
+    // Social content
+    await Post.deleteMany({ author: userId });
+    await Comment.deleteMany({ author: userId });
+
+    // Messaging — preserve other participant's conversations
+    // Delete only messages sent by this user (other user's messages stay)
+    await Message.deleteMany({ sender: userId });
+    // Remove user from conversations instead of deleting them
+    // For conversations with only 2 participants, pull the user out
+    await Conversation.updateMany(
+      { participants: userId },
+      { $pull: { participants: userId } },
+    );
+    // Clean up conversations where no participants remain
+    await Conversation.deleteMany({ participants: { $size: 0 } });
+
+    // Notifications
+    await Notification.deleteMany({
+      $or: [{ recipient: userId }, { sender: userId }],
+    });
+
+    // Follow system
+    await FollowRequest.deleteMany({
+      $or: [{ from: userId }, { to: userId }],
+    });
+    await User.updateMany(
+      { followers: userId },
+      { $pull: { followers: userId } },
+    );
+    await User.updateMany(
+      { following: userId },
+      { $pull: { following: userId } },
+    );
+
+    // Cart
+    await Cart.deleteMany({ user: userId });
+
+    // ==========================================================
+    // 7. DELETE the user account itself
+    // ==========================================================
+    await User.findByIdAndDelete(userId);
 
     res.json({ success: true, message: 'Account deleted successfully' });
   } catch (error) {
@@ -280,7 +638,7 @@ router.delete('/account', async (req, res) => {
 // ====== Follow / Unfollow ======
 
 // POST /api/user/:userId/follow
-router.post('/:userId/follow', async (req, res) => {
+router.post('/:userId/follow', protect, async (req, res) => {
   try {
     if (req.user.id === req.params.userId) {
       return res
@@ -379,7 +737,7 @@ router.post('/:userId/follow', async (req, res) => {
 });
 
 // DELETE /api/user/:userId/follow
-router.delete('/:userId/follow', async (req, res) => {
+router.delete('/:userId/follow', protect, async (req, res) => {
   try {
     if (req.user.id === req.params.userId) {
       return res
@@ -424,7 +782,7 @@ router.delete('/:userId/follow', async (req, res) => {
 // ====== Follow Requests ======
 
 // GET /api/user/follow-requests
-router.get('/follow-requests/list', async (req, res) => {
+router.get('/follow-requests/list', protect, async (req, res) => {
   try {
     const requests = await FollowRequest.find({
       to: req.user.id,
@@ -441,7 +799,7 @@ router.get('/follow-requests/list', async (req, res) => {
 });
 
 // PUT /api/user/follow-requests/:requestId/accept
-router.put('/follow-requests/:requestId/accept', async (req, res) => {
+router.put('/follow-requests/:requestId/accept', protect, async (req, res) => {
   try {
     const request = await FollowRequest.findById(req.params.requestId);
     if (!request) {
@@ -492,7 +850,7 @@ router.put('/follow-requests/:requestId/accept', async (req, res) => {
 });
 
 // PUT /api/user/follow-requests/:requestId/reject
-router.put('/follow-requests/:requestId/reject', async (req, res) => {
+router.put('/follow-requests/:requestId/reject', protect, async (req, res) => {
   try {
     const request = await FollowRequest.findById(req.params.requestId);
     if (!request) {
@@ -519,12 +877,16 @@ router.put('/follow-requests/:requestId/reject', async (req, res) => {
 // ====== Privacy Settings ======
 
 // PUT /api/user/privacy
-router.put('/privacy', async (req, res) => {
+router.put('/privacy', protect, async (req, res) => {
   try {
     const allowedFields = ['isPrivate', 'showLocation', 'showEmail'];
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
+        // Ensure boolean values only
+        if (typeof req.body[field] !== 'boolean') {
+          return; // skip non-boolean values
+        }
         updates[field] = req.body[field];
       }
     });
@@ -539,6 +901,12 @@ router.put('/privacy', async (req, res) => {
         .status(404)
         .json({ success: false, message: 'User not found' });
     }
+
+    audit(req, 'privacy_updated', req.user.id, 'Privacy settings updated', {
+      isPrivate: user.isPrivate,
+      showLocation: user.showLocation,
+      showEmail: user.showEmail,
+    });
 
     res.json({
       success: true,
@@ -555,7 +923,7 @@ router.put('/privacy', async (req, res) => {
 });
 
 // GET /api/user/privacy
-router.get('/privacy', async (req, res) => {
+router.get('/privacy', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
       'isPrivate showLocation showEmail',
@@ -734,6 +1102,193 @@ router.get('/:userId/presence', protect, async (req, res) => {
     res.json({ success: true, ...presence });
   } catch (error) {
     console.error('Get presence error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ========================================
+// GET /api/user/export-data
+// PIPEDA: Export all user data (right of access)
+// Rate limited: 1 request per hour per user
+// ========================================
+const exportLimiter = require('express-rate-limit')({
+  windowMs: 60 * 60 * 1000,
+  max: 2,
+  keyGenerator: (req) => req.user?.id || 'anonymous',
+  message: {
+    success: false,
+    message: 'Data export is limited to 2 requests per hour',
+  },
+  validate: { keyGeneratorIpFallback: false },
+});
+
+router.get('/export-data', protect, exportLimiter, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Collect all user data across collections
+    const userData = await User.findById(userId)
+      .select('-password -verificationToken -verificationTokenExpiry -__v')
+      .lean();
+
+    if (!userData) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    }
+
+    const [
+      pets,
+      posts,
+      comments,
+      appointments,
+      groomerAppointments,
+      reviews,
+      groomerReviews,
+      notifications,
+      followRequests,
+      walletTransactions,
+      conversations,
+      messages,
+      healthRecords,
+      cart,
+    ] = await Promise.all([
+      Pet.find({ owner: userId }).lean(),
+      Post.find({ author: userId }).lean(),
+      Comment.find({ author: userId }).lean(),
+      Appointment.find({ user: userId }).lean(),
+      GroomerAppointment.find({ user: userId }).lean(),
+      Review.find({ user: userId }).lean(),
+      GroomerReview.find({ user: userId }).lean(),
+      Notification.find({ recipient: userId })
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean(),
+      FollowRequest.find({ $or: [{ from: userId }, { to: userId }] }).lean(),
+      WalletTransaction.find({ user: userId }).sort({ createdAt: -1 }).lean(),
+      Conversation.find({ participants: userId }).lean(),
+      Message.find({ sender: userId })
+        .sort({ createdAt: -1 })
+        .limit(1000)
+        .lean(),
+      HealthRecord.find({ owner: userId }).lean(),
+      Cart.find({ user: userId }).lean(),
+    ]);
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      exportVersion: '1.0',
+      notice:
+        'This file contains all personal data Petopia holds about you, in compliance with PIPEDA (Personal Information Protection and Electronic Documents Act).',
+      account: userData,
+      pets,
+      posts,
+      comments,
+      vetAppointments: appointments,
+      groomerAppointments,
+      reviews,
+      groomerReviews,
+      notifications: notifications.length > 0 ? notifications : [],
+      followRequests,
+      walletTransactions,
+      conversations,
+      messagesSent: messages,
+      healthRecords,
+      cart,
+    };
+
+    // Audit log
+    audit(req, 'data_export_requested', userId, 'User requested data export');
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="petopia-data-export-${Date.now()}.json"`,
+    );
+    res.json({ success: true, data: exportData });
+  } catch (error) {
+    console.error('Data export error:', error);
+    res
+      .status(500)
+      .json({ success: false, message: 'Server error during data export' });
+  }
+});
+
+// ========================================
+// PUT /api/user/notification-preferences
+// CASL: Update notification preferences (persisted)
+// ========================================
+router.put('/notification-preferences', protect, async (req, res) => {
+  try {
+    const allowedPrefs = [
+      'pushEnabled',
+      'likesEnabled',
+      'commentsEnabled',
+      'followsEnabled',
+      'messagesEnabled',
+      'emailMarketing',
+    ];
+
+    const updates = {};
+    allowedPrefs.forEach((pref) => {
+      if (req.body[pref] !== undefined) {
+        updates[`notificationPreferences.${pref}`] = Boolean(req.body[pref]);
+      }
+    });
+    updates['notificationPreferences.consentUpdatedAt'] = new Date();
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, {
+      new: true,
+      runValidators: true,
+    }).select('notificationPreferences');
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    }
+
+    // Audit log
+    audit(
+      req,
+      'notification_preferences_updated',
+      req.user.id,
+      'Notification preferences updated',
+      {
+        preferences: user.notificationPreferences,
+      },
+    );
+
+    res.json({
+      success: true,
+      notificationPreferences: user.notificationPreferences,
+    });
+  } catch (error) {
+    console.error('Update notification preferences error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ========================================
+// GET /api/user/notification-preferences
+// CASL: Get notification preferences
+// ========================================
+router.get('/notification-preferences', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select(
+      'notificationPreferences',
+    );
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    }
+    res.json({
+      success: true,
+      notificationPreferences: user.notificationPreferences,
+    });
+  } catch (error) {
+    console.error('Get notification preferences error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

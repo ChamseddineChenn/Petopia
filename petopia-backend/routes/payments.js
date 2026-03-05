@@ -139,13 +139,13 @@ router.post('/create-intent', intentLimiter, protect, async (req, res) => {
     // metadata is CRITICAL — the webhook handler uses it to credit the correct user
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
-      currency: 'usd',
+      currency: 'cad',
       customer: customerId,
       metadata: {
         petopiaUserId: req.user.id,
         petDollarAmount: petDollarAmount.toString(),
-        chargeUSD: charge.chargeUSD.toString(),
-        feeUSD: charge.feeUSD.toString(),
+        chargeCAD: charge.chargeCAD.toString(),
+        feeCAD: charge.feeCAD.toString(),
         purpose: 'wallet_top_up',
       },
       // Restrict payment methods to cards only (no bank transfers, etc.)
@@ -153,7 +153,7 @@ router.post('/create-intent', intentLimiter, protect, async (req, res) => {
       // Capture immediately — no separate capture step
       capture_method: 'automatic',
       // Description visible in Stripe Dashboard
-      description: `Petopia Wallet Top-Up: P$${petDollarAmount.toFixed(2)} (charged $${charge.chargeUSD.toFixed(2)} incl. fee) for user ${req.user.id}`,
+      description: `Petopia Wallet Top-Up: P$${petDollarAmount.toFixed(2)} (charged $${charge.chargeCAD.toFixed(2)} CAD incl. fee) for user ${req.user.id}`,
     });
 
     // Return ONLY the client secret — never expose the full PaymentIntent object
@@ -162,8 +162,8 @@ router.post('/create-intent', intentLimiter, protect, async (req, res) => {
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       amount: petDollarAmount,
-      chargeUSD: charge.chargeUSD,
-      feeUSD: charge.feeUSD,
+      chargeUSD: charge.chargeCAD,
+      feeUSD: charge.feeCAD,
       publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
     });
   } catch (error) {
@@ -194,8 +194,8 @@ router.get('/calculate-fee', protect, (req, res) => {
   res.json({
     success: true,
     petDollars: charge.petDollars,
-    chargeUSD: charge.chargeUSD,
-    feeUSD: charge.feeUSD,
+    chargeUSD: charge.chargeCAD,
+    feeUSD: charge.feeCAD,
     feePercent: STRIPE_FEE_PERCENT * 100,
   });
 });

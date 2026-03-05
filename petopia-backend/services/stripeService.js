@@ -60,7 +60,7 @@ function verifyWebhookSignature(rawBody, signature) {
 
 /**
  * Pet Dollar exchange rate.
- * 1 USD = 1 P$ (1:1 for simplicity — adjust as needed)
+ * 1 CAD = 1 P$ (1:1 for simplicity — adjust as needed)
  */
 const PET_DOLLAR_RATE = 1;
 
@@ -84,22 +84,23 @@ const PLATFORM_COMMISSION_RATE = 0.07; // 7% platform commission at point of sal
  * This ensures the buyer receives the EXACT P$ amount requested after Stripe's cut.
  *
  * @param {number} petDollars - Desired P$ amount
- * @returns {{ chargeUSD: number, chargeCents: number, feeUSD: number, petDollars: number }}
+ * @returns {{ chargeCAD: number, chargeCents: number, feeCAD: number, petDollars: number }}
  */
 function calculateTopUpCharge(petDollars) {
-  // To net exactly `petDollars` worth of USD after Stripe takes ~3.5%,
+  // To net exactly `petDollars` worth of CAD after Stripe takes ~3.5%,
   // we charge: amount / (1 - 0.035) = amount * 1.03627...
   // We round UP to the nearest cent to ensure we always cover the fee.
-  const grossUSD = petDollars * PET_DOLLAR_RATE / (1 - STRIPE_FEE_PERCENT);
-  const chargeUSD = Math.ceil(grossUSD * 100) / 100; // round up to nearest cent
-  const chargeCents = Math.round(chargeUSD * 100);
-  const feeUSD = Math.round((chargeUSD - petDollars * PET_DOLLAR_RATE) * 100) / 100;
+  const grossCAD = (petDollars * PET_DOLLAR_RATE) / (1 - STRIPE_FEE_PERCENT);
+  const chargeCAD = Math.ceil(grossCAD * 100) / 100; // round up to nearest cent
+  const chargeCents = Math.round(chargeCAD * 100);
+  const feeCAD =
+    Math.round((chargeCAD - petDollars * PET_DOLLAR_RATE) * 100) / 100;
 
   return {
     petDollars,
-    chargeUSD,
+    chargeCAD,
     chargeCents,
-    feeUSD,
+    feeCAD,
   };
 }
 
@@ -110,8 +111,10 @@ function calculateTopUpCharge(petDollars) {
  * @returns {{ sellerAmount: number, platformAmount: number, commissionRate: number }}
  */
 function calculateCommission(totalPetDollars) {
-  const platformAmount = Math.round(totalPetDollars * PLATFORM_COMMISSION_RATE * 100) / 100;
-  const sellerAmount = Math.round((totalPetDollars - platformAmount) * 100) / 100;
+  const platformAmount =
+    Math.round(totalPetDollars * PLATFORM_COMMISSION_RATE * 100) / 100;
+  const sellerAmount =
+    Math.round((totalPetDollars - platformAmount) * 100) / 100;
   return {
     sellerAmount,
     platformAmount,
@@ -122,10 +125,10 @@ function calculateCommission(totalPetDollars) {
 /**
  * Convert a Pet Dollar amount to cents (Stripe's smallest currency unit).
  * @param {number} petDollars - Amount in Pet Dollars
- * @returns {number} Amount in USD cents
+ * @returns {number} Amount in CAD cents
  */
 function petDollarsToCents(petDollars) {
-  // 1 P$ = 1 USD → 100 cents
+  // 1 P$ = 1 CAD → 100 cents
   const cents = Math.round(petDollars * 100 * PET_DOLLAR_RATE);
   if (cents < 50) {
     throw new Error('Minimum charge is $0.50 (Stripe requirement)');
@@ -138,7 +141,7 @@ function petDollarsToCents(petDollars) {
 
 /**
  * Convert cents back to Pet Dollar amount.
- * @param {number} cents - Amount in USD cents
+ * @param {number} cents - Amount in CAD cents
  * @returns {number} Amount in Pet Dollars
  */
 function centsToPetDollars(cents) {

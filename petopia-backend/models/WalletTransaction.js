@@ -16,10 +16,11 @@ const walletTransactionSchema = new mongoose.Schema(
         'purchase',
         'refund',
         'reward',
-        'transfer_in',   // seller receives P$ from a sale
+        'transfer_in', // seller receives P$ from a sale
         'transfer_out',
-        'commission',     // platform commission deducted from a sale
-        'reservation',    // funds held pending appointment acceptance
+        'commission', // platform commission deducted from a sale
+        'reservation', // funds held pending appointment acceptance
+        'withdrawal', // P$ withdrawn to bank account / debit card
       ],
     },
     amount: {
@@ -55,6 +56,7 @@ const walletTransactionSchema = new mongoose.Schema(
           'stripe_payment',
           'refund',
           'reward',
+          'withdrawal',
           null,
         ],
         default: null,
@@ -116,7 +118,11 @@ const walletTransactionSchema = new mongoose.Schema(
       // Seller's net P$ received after commission
       sellerAmount: { type: Number, default: null },
       // The seller (service provider / shop owner) who received the funds
-      sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      sellerId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
     },
     status: {
       type: String,

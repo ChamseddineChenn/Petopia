@@ -136,6 +136,7 @@ router.get('/slots/:clinicId', protect, async (req, res) => {
 // POST /api/appointments â€” Book an appointment
 // ========================================
 router.post('/', protect, async (req, res) => {
+  let deductedPrice = 0;
   try {
     const { clinicId, petId, date, timeSlot, serviceName, reason } = req.body;
 
@@ -223,9 +224,11 @@ router.post('/', protect, async (req, res) => {
     if (!updatedBuyer) {
       return res.status(400).json({
         success: false,
-        message: 'Insufficient balance or concurrent transaction. Please try again.',
+        message:
+          'Insufficient balance or concurrent transaction. Please try again.',
       });
     }
+    deductedPrice = price;
 
     const appointment = await Appointment.create({
       clinic: clinicId,
@@ -308,12 +311,31 @@ router.post('/', protect, async (req, res) => {
     res.status(201).json({ success: true, appointment: populated });
   } catch (error) {
     console.error('Book appointment error:', error);
+
+    // Rollback P$ if balance was deducted but booking failed
+    if (deductedPrice > 0) {
+      try {
+        await User.findByIdAndUpdate(req.user.id, {
+          $inc: { petDollars: deductedPrice },
+        });
+        console.log('Rolled back P$ reservation after booking error');
+      } catch (rollbackErr) {
+        console.error(
+          'CRITICAL: Failed to rollback P$ reservation:',
+          rollbackErr,
+        );
+      }
+    }
+
     if (error.code === 11000) {
       return res
         .status(400)
         .json({ success: false, message: 'This time slot is already booked' });
     }
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({
+      success: false,
+      message: 'Server error. Your balance has been restored.',
+    });
   }
 });
 
@@ -446,7 +468,18 @@ router.put('/:id/status', protect, async (req, res) => {
       const price = Math.round(servicePrice * 100) / 100;
 
       if (status === 'confirmed') {
-        // ACCEPT: Transfer reserved funds to vet (93%) — platform keeps 7%
+        // ACCEPT: Mark reservation as accepted (funds stay reserved until completed)
+        await WalletTransaction.findOneAndUpdate(
+          {
+            'reference.entityId': appointment._id,
+            'reference.entityType': 'vet_appointment',
+            type: 'reservation',
+            status: 'pending',
+          },
+          { status: 'accepted' },
+        );
+      } else if (status === 'completed') {
+        // COMPLETE: Transfer reserved funds to vet (93%) — platform keeps 7%
         const split = calculateCommission(price);
 
         // Credit the vet
@@ -462,19 +495,21 @@ router.put('/:id/status', protect, async (req, res) => {
             'reference.entityId': appointment._id,
             'reference.entityType': 'vet_appointment',
             type: 'reservation',
-            status: 'pending',
+            status: { $in: ['pending', 'accepted'] },
           },
           { status: 'completed' },
         );
 
         // Record buyer's finalized purchase transaction
-        const buyer = await User.findById(appointment.user).select('petDollars');
+        const buyer = await User.findById(appointment.user).select(
+          'petDollars',
+        );
         await WalletTransaction.create({
           user: appointment.user,
           type: 'purchase',
           amount: -price,
           balanceAfter: buyer?.petDollars ?? 0,
-          description: `Vet appointment confirmed — ${appointment.service.name}`,
+          description: `Vet appointment completed — ${appointment.service.name}`,
           reference: {
             entityType: 'vet_appointment',
             entityId: appointment._id,
@@ -509,14 +544,48 @@ router.put('/:id/status', protect, async (req, res) => {
             status: 'completed',
           });
         }
-      } else if (status === 'cancelled' && appointment.cancelledBy) {
-        // CANCEL/DECLINE: Refund reserved funds to pet owner
-        // Only refund if the appointment was pending (funds were reserved)
+      } else if (status === 'no-show') {
+        // NO-SHOW: Refund reserved funds to pet owner
         const reservationTx = await WalletTransaction.findOne({
           'reference.entityId': appointment._id,
           'reference.entityType': 'vet_appointment',
           type: 'reservation',
-          status: 'pending',
+          status: { $in: ['pending', 'accepted'] },
+        });
+
+        if (reservationTx) {
+          const refundAmount = Math.abs(reservationTx.amount);
+          const updatedBuyer = await User.findByIdAndUpdate(
+            appointment.user,
+            { $inc: { petDollars: refundAmount } },
+            { new: true, select: 'petDollars' },
+          );
+
+          reservationTx.status = 'reversed';
+          await reservationTx.save();
+
+          if (updatedBuyer) {
+            await WalletTransaction.create({
+              user: appointment.user,
+              type: 'refund',
+              amount: refundAmount,
+              balanceAfter: updatedBuyer.petDollars,
+              description: `Refund — vet appointment no-show (${appointment.service.name})`,
+              reference: {
+                entityType: 'vet_appointment',
+                entityId: appointment._id,
+              },
+              status: 'completed',
+            });
+          }
+        }
+      } else if (status === 'cancelled' && appointment.cancelledBy) {
+        // CANCEL/DECLINE: Refund reserved funds to pet owner
+        const reservationTx = await WalletTransaction.findOne({
+          'reference.entityId': appointment._id,
+          'reference.entityType': 'vet_appointment',
+          type: 'reservation',
+          status: { $in: ['pending', 'accepted'] },
         });
 
         if (reservationTx) {

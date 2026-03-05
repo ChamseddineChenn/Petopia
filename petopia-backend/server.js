@@ -30,6 +30,9 @@ const server = http.createServer(app);
 // Security Middleware
 // ========================================
 
+// Trust first proxy (required for rate limiting behind reverse proxy / load balancer)
+app.set('trust proxy', 1);
+
 // Set security HTTP headers (X-Content-Type-Options, X-Frame-Options, HSTS, etc.)
 app.use(helmet());
 
@@ -47,7 +50,7 @@ app.use(
   }),
 );
 
-// Global rate limiter — 100 requests per 15 minutes per IP
+// Global rate limiter — 200 requests per 15 minutes per IP
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
@@ -89,6 +92,32 @@ const connectDB = async () => {
       socketTimeoutMS: 45000,
     });
     console.log('MongoDB connected: ' + conn.connection.host);
+
+    // ── One-time index migration: drop old non-partial unique index ──
+    try {
+      const collection = conn.connection.db.collection('groomerappointments');
+      const indexes = await collection.indexes();
+      const oldIdx = indexes.find(
+        (idx) =>
+          idx.unique &&
+          idx.key?.shop === 1 &&
+          idx.key?.date === 1 &&
+          idx.key?.['timeSlot.start'] === 1 &&
+          !idx.partialFilterExpression,
+      );
+      if (oldIdx) {
+        await collection.dropIndex(oldIdx.name);
+        console.log(
+          'Dropped old groomerappointments unique index:',
+          oldIdx.name,
+        );
+      }
+    } catch (idxErr) {
+      // Non-fatal — index may not exist yet
+      if (!idxErr.message?.includes('not found')) {
+        console.error('Index migration note:', idxErr.message);
+      }
+    }
   } catch (err) {
     console.error('MongoDB connection error:', err.message);
     console.log('Retrying MongoDB connection in 5 seconds...');
@@ -127,19 +156,13 @@ app.use('/api/shops', require('./routes/shops'));
 app.use('/api/cart', require('./routes/cart'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/payouts', require('./routes/payouts'));
 
 // Health check
 app.get('/health', (req, res) => {
-  const dbState = mongoose.connection.readyState;
-  const states = {
-    0: 'disconnected',
-    1: 'connected',
-    2: 'connecting',
-    3: 'disconnecting',
-  };
+  const dbConnected = mongoose.connection.readyState === 1;
   res.json({
-    status: 'OK',
-    database: states[dbState] || 'unknown',
+    status: dbConnected ? 'OK' : 'DEGRADED',
     timestamp: new Date(),
   });
 });

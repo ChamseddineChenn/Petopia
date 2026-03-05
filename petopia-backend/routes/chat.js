@@ -17,19 +17,17 @@ const {
 // ========================================
 // Helper: determine if a user can message another directly
 // Returns true for direct, false for message-request
+// Instagram-like: it's a request if the recipient does NOT follow the sender
 // ========================================
 async function canMessageDirectly(senderId, recipientId) {
-  const recipient = await User.findById(recipientId).lean();
+  const recipient = await User.findById(recipientId).select('following').lean();
   if (!recipient) return false;
 
-  // Public profile → always direct
-  if (!recipient.isPrivate) return true;
-
-  // Private profile → must be a follower (recipient accepted them)
-  const isFollower = recipient.followers?.some(
+  // If recipient follows the sender → direct message
+  const recipientFollowsSender = recipient.following?.some(
     (f) => f.toString() === senderId.toString(),
   );
-  return !!isFollower;
+  return !!recipientFollowsSender;
 }
 
 // ========================================
@@ -143,6 +141,15 @@ router.post('/conversations', protect, async (req, res) => {
 
     // If text was provided, send the first message
     if (text && text.trim()) {
+      if (text.length > 5000) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: 'Message text cannot exceed 5000 characters',
+          });
+      }
+
       const message = await Message.create({
         conversation: conversation._id,
         sender: senderId,
@@ -260,7 +267,8 @@ router.get('/conversations/:id/messages', protect, async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-    const { before, limit = 30 } = req.query;
+    const { before, limit: rawLimit = 30 } = req.query;
+    const limit = Math.min(Math.max(parseInt(rawLimit) || 30, 1), 100);
 
     // Verify user is a participant
     const conversation = await Conversation.findOne({
@@ -282,7 +290,7 @@ router.get('/conversations/:id/messages', protect, async (req, res) => {
     const messages = await Message.find(query)
       .populate('sender', 'name profileImage')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
+      .limit(limit)
       .lean();
 
     res.json({ success: true, messages: messages.reverse() });
@@ -307,6 +315,15 @@ router.post('/conversations/:id/messages', protect, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: 'Message text is required' });
+    }
+
+    if (text.length > 5000) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Message text cannot exceed 5000 characters',
+        });
     }
 
     // Verify user is a participant
@@ -356,6 +373,22 @@ router.post('/conversations/:id/messages', protect, async (req, res) => {
     const recipientId = conversation.participants.find(
       (p) => p.toString() !== userId,
     );
+
+    // Re-evaluate isAccepted for the recipient in case follow status changed
+    const recipientAccepted = conversation.isAccepted?.get(
+      recipientId.toString(),
+    );
+    if (!recipientAccepted) {
+      // Check if recipient now follows the sender → auto-accept
+      const nowDirect = await canMessageDirectly(
+        userId,
+        recipientId.toString(),
+      );
+      if (nowDirect) {
+        conversation.isAccepted.set(recipientId.toString(), true);
+      }
+    }
+
     const recipientUnread =
       (conversation.unreadCount?.get(recipientId.toString()) || 0) + 1;
     conversation.unreadCount.set(recipientId.toString(), recipientUnread);
@@ -385,7 +418,10 @@ router.post('/conversations/:id/messages', protect, async (req, res) => {
         status: message.status,
         deliveredAt: message.deliveredAt,
       },
-      { _id: id },
+      {
+        _id: id,
+        isRequest: !conversation.isAccepted?.get(recipientId.toString()),
+      },
     );
 
     res.json({ success: true, message: populated });
@@ -691,7 +727,7 @@ router.post('/block/:userId', protect, async (req, res) => {
 
     const convIds = conversations.map((c) => c._id);
     if (convIds.length > 0) {
-      await Message.deleteMany({ conversationId: { $in: convIds } });
+      await Message.deleteMany({ conversation: { $in: convIds } });
       await Conversation.deleteMany({ _id: { $in: convIds } });
     }
 
@@ -718,42 +754,6 @@ router.delete('/block/:userId', protect, async (req, res) => {
     res.json({ success: true, message: 'User unblocked' });
   } catch (error) {
     console.error('Unblock user error:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// ========================================
-// DELETE /api/chat/conversations/:id
-// Delete a conversation and its messages
-// ========================================
-router.delete('/conversations/:id', protect, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const conversationId = req.params.id;
-
-    const conversation = await Conversation.findById(conversationId);
-    if (!conversation) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Conversation not found' });
-    }
-
-    // Verify user is a participant
-    const isParticipant = conversation.participants.some(
-      (p) => p.toString() === userId,
-    );
-    if (!isParticipant) {
-      return res
-        .status(403)
-        .json({ success: false, message: 'Not a participant' });
-    }
-
-    await Message.deleteMany({ conversation: conversationId });
-    await Conversation.findByIdAndDelete(conversationId);
-
-    res.json({ success: true, message: 'Conversation deleted' });
-  } catch (error) {
-    console.error('Delete conversation error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

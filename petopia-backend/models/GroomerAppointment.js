@@ -75,10 +75,15 @@ const groomerAppointmentSchema = new mongoose.Schema(
   },
 );
 
-// Prevent double-booking: unique shop + date + timeSlot.start
+// Prevent double-booking: unique shop + date + timeSlot.start (only for active appointments)
 groomerAppointmentSchema.index(
   { shop: 1, date: 1, 'timeSlot.start': 1 },
-  { unique: true },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ['pending', 'confirmed'] },
+    },
+  },
 );
 // User's appointments
 groomerAppointmentSchema.index({ user: 1, date: -1 });

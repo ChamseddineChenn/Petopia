@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "63107257042",
+    "project_id": "petopia-96b5d",
+    "storage_bucket": "petopia-96b5d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:63107257042:android:8760be380c8181af3f130b",
+        "android_client_info": {
+          "package_name": "com.codeanvil.petopia"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCTqPKga48fPAr82N4avbr79G_hDTePNpg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

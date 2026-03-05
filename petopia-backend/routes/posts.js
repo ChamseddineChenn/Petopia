@@ -46,21 +46,70 @@ router.post('/', protect, async (req, res) => {
         .json({ success: false, message: 'Post must have text or media' });
     }
 
+    // --- Input validation ---
+    if (content && content.length > 10000) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: 'Post content cannot exceed 10,000 characters',
+        });
+    }
+
+    // Validate media array
+    if (media && !Array.isArray(media)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Media must be an array' });
+    }
+    if (media && media.length > 10) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Maximum 10 media items per post' });
+    }
+    const validatedMedia = (media || []).filter(
+      (m) =>
+        typeof m === 'object' &&
+        typeof m.url === 'string' &&
+        m.url.length <= 2000,
+    );
+
+    // Validate tags
+    let validatedTags = [];
+    if (tags && Array.isArray(tags)) {
+      validatedTags = tags
+        .filter((t) => typeof t === 'string' && t.length <= 50)
+        .slice(0, 20);
+    }
+
     const postData = {
       author: req.user.id,
       content: content || '',
-      media: media || [],
-      tags: tags || [],
+      media: validatedMedia,
+      tags: validatedTags,
       pet: petId || null,
     };
 
-    // Attach GeoJSON location if provided
+    // Attach GeoJSON location if provided (validate coordinate bounds)
     if (location && location.coordinates && location.coordinates.length === 2) {
-      postData.location = {
-        type: 'Point',
-        coordinates: location.coordinates, // [lng, lat]
-        name: location.name || '',
-      };
+      const [lng, lat] = location.coordinates;
+      if (
+        typeof lng === 'number' &&
+        typeof lat === 'number' &&
+        lng >= -180 &&
+        lng <= 180 &&
+        lat >= -90 &&
+        lat <= 90
+      ) {
+        postData.location = {
+          type: 'Point',
+          coordinates: [lng, lat],
+          name:
+            typeof location.name === 'string'
+              ? location.name.slice(0, 200)
+              : '',
+        };
+      }
     }
 
     const post = await Post.create(postData);
@@ -179,6 +228,30 @@ router.get('/feed', protect, async (req, res) => {
         },
       });
     }
+
+    // Stage 2b: Exclude private users' posts (unless current user follows them)
+    const following = (currentUser?.following || []).map(
+      (id) => new mongoose.Types.ObjectId(id.toString()),
+    );
+    pipeline.push({
+      $lookup: {
+        from: 'users',
+        localField: 'author',
+        foreignField: '_id',
+        as: '_authorInfo',
+        pipeline: [{ $project: { isPrivate: 1 } }],
+      },
+    });
+    pipeline.push({
+      $match: {
+        $or: [
+          { '_authorInfo.isPrivate': { $ne: true } },
+          { author: new mongoose.Types.ObjectId(req.user.id) },
+          ...(following.length > 0 ? [{ author: { $in: following } }] : []),
+        ],
+      },
+    });
+    pipeline.push({ $project: { _authorInfo: 0 } });
 
     // Stage 3: Interest boost â€” add a score field
     if (userInterests.length > 0) {
@@ -542,12 +615,13 @@ router.post('/:id/comments', protect, async (req, res) => {
         .status(400)
         .json({ success: false, message: 'Comment text is required' });
     }
-
-    const post = await Post.findById(req.params.id).select('author');
-    if (!post) {
+    if (content.length > 2000) {
       return res
-        .status(404)
-        .json({ success: false, message: 'Post not found' });
+        .status(400)
+        .json({
+          success: false,
+          message: 'Comment cannot exceed 2000 characters',
+        });
     }
 
     const comment = await Comment.create({
