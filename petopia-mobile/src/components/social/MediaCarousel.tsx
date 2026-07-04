@@ -11,7 +11,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { ImageViewerModal } from './ImageViewerModal';
-import type { MediaItem } from '../../store/slices/postSlice';
+import type { MediaItem, Post } from '../../store/slices/postSlice';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -19,41 +19,58 @@ interface MediaCarouselProps {
   media: MediaItem[];
   width?: number;
   height?: number;
+  post?: Post | null;
+  onLike?: (postId: string) => void;
+  onComment?: (postId: string) => void;
   /** @deprecated — video playback is now built-in */
   onVideoPress?: (item: MediaItem) => void;
 }
 
-/** If any media item is a video and no explicit height given, use 9:16 ratio. */
+/**
+ * Compute display height from the actual media dimensions.
+ * Falls back to 4:5 (portrait-ish) if no dimensions are available.
+ * Clamps between 200px and 560px so the feed stays usable.
+ */
 const computeHeight = (
   media: MediaItem[],
-  w: number,
+  containerW: number,
   explicit?: number,
 ): number => {
   if (explicit) return explicit;
-  const hasVideo = media.some((m) => m.type === 'video');
-  if (hasVideo) return Math.min(Math.round(w * (16 / 9)), 560);
-  return 300;
+
+  // Use the first media item's real dimensions if available
+  const first = media[0];
+  if (first?.width && first?.height && first.width > 0 && first.height > 0) {
+    const aspect = first.height / first.width; // e.g. 0.5625 for 16:9 landscape
+    const h = Math.round(containerW * aspect);
+    return Math.max(200, Math.min(h, 560));
+  }
+
+  // Fallback: 4:5 ratio (Instagram default)
+  return Math.min(Math.round(containerW * (5 / 4)), 560);
 };
 
 export const MediaCarousel: React.FC<MediaCarouselProps> = ({
   media,
   width = SCREEN_WIDTH,
   height: explicitHeight,
+  post,
+  onLike,
+  onComment,
   ...rest
 }) => {
   // consume legacy prop to prevent ReferenceError
   void rest.onVideoPress;
   const [activeIndex, setActiveIndex] = useState(0);
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [videoThumb, setVideoThumb] = useState<string | null>(null);
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
   const [imageViewerIndex, setImageViewerIndex] = useState(0);
 
   const height = computeHeight(media, width, explicitHeight);
 
   // Collect all image URLs for the full-screen viewer
-  const imageUrls = media
-    .filter((m) => m.type !== 'video')
-    .map((m) => m.url);
+  const imageUrls = media.filter((m) => m.type !== 'video').map((m) => m.url);
 
   const onViewableItemsChanged = useCallback(
     ({ viewableItems }: { viewableItems: ViewToken[] }) => {
@@ -72,6 +89,7 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
 
   const handleVideoPress = (item: MediaItem) => {
     setVideoUri(item.url);
+    setVideoThumb(item.thumbnail || null);
   };
 
   const handleImagePress = (item: MediaItem, carouselIndex: number) => {
@@ -148,7 +166,14 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
         <VideoPlayerModal
           visible={videoUri !== null}
           uri={videoUri || ''}
-          onClose={() => setVideoUri(null)}
+          thumbnail={videoThumb}
+          post={post}
+          onClose={() => {
+            setVideoUri(null);
+            setVideoThumb(null);
+          }}
+          onLike={onLike}
+          onComment={onComment}
         />
         <ImageViewerModal
           visible={imageViewerOpen}
@@ -206,7 +231,14 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
       <VideoPlayerModal
         visible={videoUri !== null}
         uri={videoUri || ''}
-        onClose={() => setVideoUri(null)}
+        thumbnail={videoThumb}
+        post={post}
+        onClose={() => {
+          setVideoUri(null);
+          setVideoThumb(null);
+        }}
+        onLike={onLike}
+        onComment={onComment}
       />
       <ImageViewerModal
         visible={imageViewerOpen}

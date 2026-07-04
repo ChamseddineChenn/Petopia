@@ -1,5 +1,12 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, Pressable } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Modal,
+  Pressable,
+  LayoutChangeEvent,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Avatar } from '../common/Avatar';
 import { useAlert } from '../ui/CustomAlert';
@@ -116,7 +123,16 @@ export const PostCard: React.FC<PostCardProps> = ({
   const petName = post.pet?.name || '';
   const isOwner = currentUserId === post.author?._id;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [cardWidth, setCardWidth] = useState(0);
   const { showAlert } = useAlert();
+
+  const handleLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      const w = e.nativeEvent.layout.width;
+      if (w > 0 && w !== cardWidth) setCardWidth(w);
+    },
+    [cardWidth],
+  );
 
   const handleDelete = () => {
     setMenuOpen(false);
@@ -136,7 +152,16 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   return (
-    <View className="bg-white mb-2" style={{ borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#E5E7EB' }}>
+    <View
+      onLayout={handleLayout}
+      className="bg-white mb-2"
+      style={{
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        overflow: 'hidden',
+      }}
+    >
       {/* ─── Header ─── */}
       <View className="px-4 py-3 flex-row items-center">
         <TouchableOpacity
@@ -256,8 +281,14 @@ export const PostCard: React.FC<PostCardProps> = ({
       )}
 
       {/* ─── Media ─── */}
-      {post.media && post.media.length > 0 && (
-        <MediaCarousel media={post.media} />
+      {post.media && post.media.length > 0 && cardWidth > 0 && (
+        <MediaCarousel
+          media={post.media}
+          width={cardWidth}
+          post={post}
+          onLike={onLike}
+          onComment={onComment}
+        />
       )}
 
       {/* ─── Shared Post Embed ─── */}

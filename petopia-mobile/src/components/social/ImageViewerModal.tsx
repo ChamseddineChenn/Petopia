@@ -184,9 +184,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                   height: i === currentIndex ? 8 : 6,
                   borderRadius: i === currentIndex ? 4 : 3,
                   backgroundColor:
-                    i === currentIndex
-                      ? '#fff'
-                      : 'rgba(255,255,255,0.4)',
+                    i === currentIndex ? '#fff' : 'rgba(255,255,255,0.4)',
                   marginHorizontal: 4,
                 }}
               />

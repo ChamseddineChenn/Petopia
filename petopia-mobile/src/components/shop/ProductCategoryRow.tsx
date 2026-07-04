@@ -100,7 +100,13 @@ export const ProductCategoryRow: React.FC<ProductCategoryRowProps> = ({
 
       {/* Product list */}
       {loading ? (
-        <View style={{ height: 200, alignItems: 'center', justifyContent: 'center' }}>
+        <View
+          style={{
+            height: 200,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
           <ActivityIndicator color="#4DB6AC" />
         </View>
       ) : products.length === 0 ? (
@@ -129,9 +135,7 @@ export const ProductCategoryRow: React.FC<ProductCategoryRowProps> = ({
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingLeft: 16, paddingRight: 6 }}
-          ListFooterComponent={
-            products.length >= 10 ? <ViewAllButton /> : null
-          }
+          ListFooterComponent={products.length >= 10 ? <ViewAllButton /> : null}
         />
       )}
     </View>

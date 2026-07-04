@@ -186,7 +186,7 @@ export const SocialFeedScreen: React.FC = () => {
         data={feed}
         renderItem={renderPost}
         keyExtractor={(item) => item._id}
-        contentContainerStyle={{ paddingTop: 0 }}
+        contentContainerStyle={{ paddingTop: 0, paddingHorizontal: 6 }}
         showsVerticalScrollIndicator={false}
         refreshControl={refreshControl}
         ListHeaderComponent={ListHeader}

@@ -17,11 +17,7 @@ import { Image } from 'expo-image';
 import axios from 'axios';
 import { API_BASE_URL } from '../../config';
 import { RootState, AppDispatch } from '../../store/store';
-import {
-  fetchShops,
-  PetShop,
-  Product,
-} from '../../store/slices/shopSlice';
+import { fetchShops, PetShop, Product } from '../../store/slices/shopSlice';
 import { ProductCategoryRow } from '../shop/ProductCategoryRow';
 
 // ────────────────────────────────────────
@@ -260,7 +256,14 @@ export const PetShopListScreen: React.FC = () => {
       pathname: '/view-all-products',
       params: navParams,
     } as any);
-  }, [router, productSearch, selectedPetType, selectedSort, minPrice, maxPrice]);
+  }, [
+    router,
+    productSearch,
+    selectedPetType,
+    selectedSort,
+    minPrice,
+    maxPrice,
+  ]);
 
   // ── Navigate to browse all (with full filters) ──
   const handleBrowseAll = useCallback(() => {
@@ -459,9 +462,7 @@ export const PetShopListScreen: React.FC = () => {
   );
 
   // ── Check if all sections are still loading (initial) ──
-  const allSectionsLoading = SECTIONS.every(
-    (s) => sectionData[s.key]?.loading,
-  );
+  const allSectionsLoading = SECTIONS.every((s) => sectionData[s.key]?.loading);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#FAFAF7' }}>
@@ -736,9 +737,7 @@ export const PetShopListScreen: React.FC = () => {
                           selectedPetType === pt.value ? '#4DB6AC' : '#fff',
                         borderWidth: 1,
                         borderColor:
-                          selectedPetType === pt.value
-                            ? '#4DB6AC'
-                            : '#E5E7EB',
+                          selectedPetType === pt.value ? '#4DB6AC' : '#E5E7EB',
                       }}
                     >
                       <Text
@@ -796,8 +795,7 @@ export const PetShopListScreen: React.FC = () => {
                         style={{
                           fontSize: 12,
                           fontWeight: '500',
-                          color:
-                            selectedSort === s.value ? '#fff' : '#4B5563',
+                          color: selectedSort === s.value ? '#fff' : '#4B5563',
                         }}
                       >
                         {s.label}
@@ -916,9 +914,7 @@ export const PetShopListScreen: React.FC = () => {
               }}
             >
               <ActivityIndicator size="large" color="#4DB6AC" />
-              <Text
-                style={{ fontSize: 14, color: '#9CA3AF', marginTop: 12 }}
-              >
+              <Text style={{ fontSize: 14, color: '#9CA3AF', marginTop: 12 }}>
                 Loading products...
               </Text>
             </View>
@@ -945,9 +941,7 @@ export const PetShopListScreen: React.FC = () => {
             ) && (
               <View style={{ alignItems: 'center', paddingTop: 40 }}>
                 <Ionicons name="cube-outline" size={48} color="#D1D5DB" />
-                <Text
-                  style={{ fontSize: 15, color: '#6B7280', marginTop: 12 }}
-                >
+                <Text style={{ fontSize: 15, color: '#6B7280', marginTop: 12 }}>
                   No products available yet
                 </Text>
               </View>

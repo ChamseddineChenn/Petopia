@@ -90,7 +90,9 @@ export const ViewAllProductsScreen: React.FC = () => {
 
   // ── Filter state (initialized from route params) ──
   const [searchText, setSearchText] = useState(params.search || '');
-  const [selectedCategory, setSelectedCategory] = useState(params.category || '');
+  const [selectedCategory, setSelectedCategory] = useState(
+    params.category || '',
+  );
   const [selectedPetType, setSelectedPetType] = useState(params.petType || '');
   const [selectedSort, setSelectedSort] = useState(params.sort || '');
   const [minPrice, setMinPrice] = useState(params.minPrice || '');
@@ -155,7 +157,16 @@ export const ViewAllProductsScreen: React.FC = () => {
         setLoading(false);
       }
     },
-    [token, selectedCategory, selectedPetType, selectedSort, searchText, isOnSale, minPrice, maxPrice],
+    [
+      token,
+      selectedCategory,
+      selectedPetType,
+      selectedSort,
+      searchText,
+      isOnSale,
+      minPrice,
+      maxPrice,
+    ],
   );
 
   useEffect(() => {
@@ -314,8 +325,7 @@ export const ViewAllProductsScreen: React.FC = () => {
 
   // ── Product card ──
   const renderProduct = ({ item }: { item: Product }) => {
-    const shopName =
-      typeof item.shop === 'object' ? item.shop.shopName : '';
+    const shopName = typeof item.shop === 'object' ? item.shop.shopName : '';
     const hasDiscount =
       item.compareAtPrice != null && item.compareAtPrice > item.price;
     const discountPct = hasDiscount
@@ -375,9 +385,7 @@ export const ViewAllProductsScreen: React.FC = () => {
                 paddingVertical: 2,
               }}
             >
-              <Text
-                style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}
-              >
+              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
                 -{discountPct}%
               </Text>
             </View>
@@ -577,8 +585,7 @@ export const ViewAllProductsScreen: React.FC = () => {
                   style={{
                     fontSize: 12,
                     fontWeight: '500',
-                    color:
-                      selectedCategory === cat.value ? '#fff' : '#4B5563',
+                    color: selectedCategory === cat.value ? '#fff' : '#4B5563',
                   }}
                 >
                   {cat.label}
@@ -623,8 +630,7 @@ export const ViewAllProductsScreen: React.FC = () => {
                   style={{
                     fontSize: 12,
                     fontWeight: '500',
-                    color:
-                      selectedPetType === pt.value ? '#fff' : '#4B5563',
+                    color: selectedPetType === pt.value ? '#fff' : '#4B5563',
                   }}
                 >
                   {pt.label}
@@ -661,8 +667,7 @@ export const ViewAllProductsScreen: React.FC = () => {
                   backgroundColor:
                     selectedSort === s.value ? '#4DB6AC' : '#fff',
                   borderWidth: 1,
-                  borderColor:
-                    selectedSort === s.value ? '#4DB6AC' : '#E5E7EB',
+                  borderColor: selectedSort === s.value ? '#4DB6AC' : '#E5E7EB',
                 }}
               >
                 <Text
@@ -813,9 +818,7 @@ export const ViewAllProductsScreen: React.FC = () => {
 
         {/* Product count */}
         {!loading && (
-          <Text
-            style={{ fontSize: 12, color: '#9CA3AF', marginRight: 12 }}
-          >
+          <Text style={{ fontSize: 12, color: '#9CA3AF', marginRight: 12 }}>
             {totalCount} item{totalCount !== 1 ? 's' : ''}
           </Text>
         )}
@@ -879,9 +882,7 @@ export const ViewAllProductsScreen: React.FC = () => {
             !loading ? (
               <View style={{ alignItems: 'center', paddingTop: 60 }}>
                 <Ionicons name="cube-outline" size={48} color="#D1D5DB" />
-                <Text
-                  style={{ fontSize: 15, color: '#6B7280', marginTop: 12 }}
-                >
+                <Text style={{ fontSize: 15, color: '#6B7280', marginTop: 12 }}>
                   No products found
                 </Text>
                 {hasActiveFilters && (

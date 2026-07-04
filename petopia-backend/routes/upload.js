@@ -133,13 +133,14 @@ router.post('/media', mediaUpload.array('media', 10), async (req, res) => {
           { quality: 'auto', fetch_format: 'auto' },
         ];
       } else {
-        // Video: auto quality, limit duration for free tier
+        // Video: auto quality
         uploadOptions.transformation = [{ quality: 'auto' }];
-        // Generate thumbnail from first frame
+        // Generate thumbnail from first frame (async to avoid timeout)
         uploadOptions.eager = [
           { width: 480, height: 480, crop: 'limit', format: 'jpg' },
         ];
-        uploadOptions.eager_async = false;
+        uploadOptions.eager_async = true;
+        uploadOptions.timeout = 120000; // 120s for video uploads
       }
 
       const result = await new Promise((resolve, reject) => {
@@ -161,7 +162,16 @@ router.post('/media', mediaUpload.array('media', 10), async (req, res) => {
         height: result.height || null,
         duration: isVideo ? Math.round(result.duration || 0) : null,
         thumbnail:
-          isVideo && result.eager?.[0] ? result.eager[0].secure_url : null,
+          isVideo && result.eager?.[0]
+            ? result.eager[0].secure_url
+            : isVideo
+              ? result.secure_url
+                  .replace(
+                    '/video/upload/',
+                    '/video/upload/w_480,h_480,c_limit/',
+                  )
+                  .replace(/\.[^.]+$/, '.jpg')
+              : null,
       };
 
       results.push(mediaItem);
@@ -188,12 +198,10 @@ router.delete('/', async (req, res) => {
 
     // Validate publicId belongs to petopia namespace — prevent deleting other resources
     if (typeof publicId !== 'string' || !publicId.startsWith('petopia/')) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: 'Not authorized to delete this resource',
-        });
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to delete this resource',
+      });
     }
 
     const allowedTypes = ['image', 'video'];

@@ -354,7 +354,17 @@ router.get('/products/:productId', protect, async (req, res) => {
 // GET /api/shops/products/browse/all — Browse all products across shops
 router.get('/products/browse/all', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 20, category, search, sort, petType, onSale, minPrice, maxPrice } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      category,
+      search,
+      sort,
+      petType,
+      onSale,
+      minPrice,
+      maxPrice,
+    } = req.query;
     const filter = { isActive: true };
     if (typeof category === 'string') filter.category = category;
     if (typeof petType === 'string') filter.petType = { $in: [petType, 'all'] };

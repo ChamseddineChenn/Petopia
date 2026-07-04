@@ -2,12 +2,22 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 })
+mongoose
+  .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 })
   .then(async () => {
-    const result = await mongoose.connection.db.collection('users').updateMany(
-      { tokenVersion: { $exists: false } },
-      { $set: { tokenVersion: 0, roleVerified: true, loginAttempts: 0, lockUntil: null } }
-    );
+    const result = await mongoose.connection.db
+      .collection('users')
+      .updateMany(
+        { tokenVersion: { $exists: false } },
+        {
+          $set: {
+            tokenVersion: 0,
+            roleVerified: true,
+            loginAttempts: 0,
+            lockUntil: null,
+          },
+        },
+      );
     console.log('Updated', result.modifiedCount, 'users');
     await mongoose.connection.close();
     process.exit(0);

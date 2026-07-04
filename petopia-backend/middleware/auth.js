@@ -44,23 +44,19 @@ exports.protect = async (req, res, next) => {
     // Treat missing tokenVersion (pre-existing users) as 0 (the schema default)
     const dbTokenVersion = user.tokenVersion ?? 0;
     if (typeof decoded.v === 'number' && decoded.v !== dbTokenVersion) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message: 'Token has been revoked. Please log in again.',
-        });
+      return res.status(401).json({
+        success: false,
+        message: 'Token has been revoked. Please log in again.',
+      });
     }
 
     // Enforce email verification
     if (!user.emailVerified) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: 'Email verification required',
-          emailVerificationRequired: true,
-        });
+      return res.status(403).json({
+        success: false,
+        message: 'Email verification required',
+        emailVerificationRequired: true,
+      });
     }
 
     req.user = {

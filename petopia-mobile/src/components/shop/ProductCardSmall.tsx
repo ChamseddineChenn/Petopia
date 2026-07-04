@@ -89,9 +89,7 @@ export const ProductCardSmall: React.FC<ProductCardSmallProps> = ({
               paddingVertical: 2,
             }}
           >
-            <Text
-              style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}
-            >
+            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
               -{discountPct}%
             </Text>
           </View>
