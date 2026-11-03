@@ -12,6 +12,7 @@ yarn-error.log*
 # Firebase / sensitive config
 config/*.json
 !config/example.json
+*firebase-adminsdk*.json
 
 # IDE
 .vscode/
