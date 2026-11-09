@@ -1,50 +1,42 @@
-# Welcome to your Expo app 👋
+# Petopia Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This folder contains the Petopia mobile client, built with React Native and Expo.
 
-## Get started
+## Main technologies
 
-1. Install dependencies
+- React Native 0.81
+- Expo SDK 54
+- Expo Router
+- TypeScript
+- NativeWind
+- Redux Toolkit
+- TanStack Query
+- Axios
+- Socket.IO client
+- Stripe React Native
+- Expo Secure Store
+- Expo Notifications
 
-   ```bash
-   npm install
-   ```
+## Application areas
 
-2. Start the app
+The mobile app includes navigation and screens for pet profiles, social posts, service discovery, veterinary and grooming appointments, messaging, health records, shops, cart, notifications, and wallet-related flows.
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Local development
 
 ```bash
-npm run reset-project
+npm install
+npm start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Before launching the app, open `src/config.ts` and update the API host in `API_BASE_URL`. The current source uses a local network IP address, which must point to the machine running the backend.
 
-## Learn more
+Useful commands:
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run android
+npm run ios
+npm run web
+npm run lint
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The API is maintained in the sibling `petopia-backend/` directory. See the [repository README](../README.md) for backend setup, environment variables, and the complete architecture.
